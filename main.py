@@ -30,18 +30,26 @@ class StockPriceMCMC:
         n_simulations=1000,
         n_steps=30,
         train_ratio=0.8,
+        use_markov_chain=True,
         use_bootstrap=True,
         block_size=5,
         drift_window=200,
         volatility_window=500,
+        n_regimes=3,
+        transition_smoothing=1.0,
     ):
         self.prices = prices
         self.n_simulations = n_simulations
         self.n_steps = n_steps
+        self.use_markov_chain = use_markov_chain
         self.use_bootstrap = use_bootstrap
         self.block_size = max(1, block_size)
         self.drift_window = max(1, drift_window)
         self.volatility_window = max(1, volatility_window)
+        self.n_regimes = max(2, int(n_regimes))
+        self.transition_smoothing = max(0.0, float(transition_smoothing))
+        self._last_markov_summary = None
+        self._last_backtest_markov_summary = None
 
         # Split data for backtesting
         split_idx = int(len(prices) * train_ratio)
@@ -98,16 +106,154 @@ class StockPriceMCMC:
             sigma = 1e-6
         return np.random.normal(loc=mu, scale=sigma, size=(self.n_simulations, self.n_steps))
 
-    def _run_simulation(self, start_price, returns_source):
+    def _prepare_returns_series(self, returns_source):
+        if returns_source is None:
+            return pd.Series(dtype='float64')
+        if isinstance(returns_source, pd.Series):
+            series = returns_source.copy()
+        elif hasattr(returns_source, 'values'):
+            series = pd.Series(returns_source.values)
+        else:
+            series = pd.Series(np.asarray(returns_source))
+        return series.dropna()
+
+    def _infer_regime_labels(self, returns_series):
+        if returns_series.empty:
+            return None, None, 0
+        unique_values = returns_series.nunique()
+        if unique_values < 2:
+            return None, None, 0
+
+        requested_states = min(self.n_regimes, unique_values)
+        if requested_states < 2:
+            return None, None, 0
+
+        try:
+            regime_labels, bin_edges = pd.qcut(
+                returns_series,
+                q=requested_states,
+                labels=False,
+                retbins=True,
+                duplicates='drop',
+            )
+        except ValueError:
+            return None, None, 0
+
+        regime_labels = regime_labels.astype(int)
+        actual_states = int(regime_labels.max()) + 1 if not regime_labels.empty else 0
+
+        if actual_states < 2:
+            return None, None, 0
+
+        return regime_labels, bin_edges, actual_states
+
+    def _build_transition_matrix(self, regime_ids, n_states):
+        counts = np.zeros((n_states, n_states), dtype=float)
+        if regime_ids.size > 1:
+            for curr, nxt in zip(regime_ids[:-1], regime_ids[1:]):
+                counts[curr, nxt] += 1
+
+        smoothing = self.transition_smoothing
+        if smoothing > 0:
+            counts += smoothing
+
+        row_sums = counts.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        return counts / row_sums
+
+    @staticmethod
+    def _draw_return_for_state(state_idx, state_draws, rng, fallback_values):
+        draws = state_draws[state_idx]
+        if draws.size > 1:
+            return float(rng.choice(draws))
+        if draws.size == 1:
+            return float(draws[0])
+        if fallback_values.size:
+            return float(rng.choice(fallback_values))
+        return 0.0
+
+    def _sample_markov_chain_returns(self, returns_source):
+        returns_series = self._prepare_returns_series(returns_source)
+        regime_labels, bin_edges, n_states = self._infer_regime_labels(returns_series)
+        if regime_labels is None or n_states < 2:
+            return None, None
+
+        label_values = regime_labels.to_numpy()
+        transition_matrix = self._build_transition_matrix(label_values, n_states)
+        state_counts = np.bincount(label_values, minlength=n_states)
+        total = state_counts.sum()
+        empirical_probs = state_counts / total if total else np.ones(n_states) / n_states
+
+        state_draws = []
+        state_means = []
+        state_stds = []
+        for state in range(n_states):
+            state_values = returns_series[regime_labels == state].values
+            state_draws.append(state_values)
+            if state_values.size:
+                state_means.append(float(state_values.mean()))
+                state_stds.append(float(state_values.std(ddof=0)))
+            else:
+                state_means.append(0.0)
+                state_stds.append(0.0)
+
+        last_state = int(label_values[-1]) if label_values.size else None
+        rng = np.random.default_rng()
+        sampled_returns = np.zeros((self.n_simulations, self.n_steps))
+        fallback_values = returns_series.values
+
+        for sim in range(self.n_simulations):
+            current_state = last_state if last_state is not None else rng.choice(n_states, p=empirical_probs)
+            for step in range(self.n_steps):
+                transition_probs = transition_matrix[current_state]
+                current_state = rng.choice(n_states, p=transition_probs)
+                sampled_returns[sim, step] = self._draw_return_for_state(
+                    current_state,
+                    state_draws,
+                    rng,
+                    fallback_values,
+                )
+
+        summary = {
+            'n_regimes': n_states,
+            'state_counts': state_counts.astype(int).tolist(),
+            'state_means': state_means,
+            'state_stds': state_stds,
+            'transition_matrix': transition_matrix.tolist(),
+            'bin_edges': [float(edge) for edge in bin_edges],
+            'empirical_probabilities': empirical_probs.tolist(),
+            'last_state': last_state,
+        }
+
+        return sampled_returns, summary
+
+    def _generate_returns(self, returns_source, context):
+        markov_summary = None
+        sampled_returns = None
+
+        if self.use_markov_chain:
+            sampled_returns, markov_summary = self._sample_markov_chain_returns(returns_source)
+
+        if sampled_returns is None:
+            sampled_returns = (
+                self._bootstrap_returns(returns_source)
+                if self.use_bootstrap
+                else self._parametric_returns(returns_source)
+            )
+
+        if context == 'forecast':
+            self._last_markov_summary = markov_summary
+        elif context == 'backtest':
+            self._last_backtest_markov_summary = markov_summary
+
+        return sampled_returns
+
+    def _run_simulation(self, start_price, returns_source, context='forecast'):
         """Simulate geometric price paths from sampled returns."""
         paths = np.zeros((self.n_simulations, self.n_steps + 1))
         paths[:, 0] = start_price
 
-        sampled_returns = (
-            self._bootstrap_returns(returns_source)
-            if self.use_bootstrap
-            else self._parametric_returns(returns_source)
-        )
+        sampled_returns = self._generate_returns(returns_source, context)
 
         for t in range(1, self.n_steps + 1):
             paths[:, t] = paths[:, t - 1] * np.exp(sampled_returns[:, t - 1])
@@ -136,7 +282,7 @@ class StockPriceMCMC:
             
         train_last_price = self.train_prices.iloc[-1]
 
-        backtest_paths = self._run_simulation(train_last_price, train_returns)
+        backtest_paths = self._run_simulation(train_last_price, train_returns, context='backtest')
 
         test_length = min(len(self.test_prices), self.n_steps)
         if test_length == 0:
@@ -149,6 +295,11 @@ class StockPriceMCMC:
         avg_rmse = np.mean(rmse_per_path)
         
         return avg_rmse, rmse_per_path, test_prices_actual, backtest_paths
+
+    def get_latest_markov_summary(self, context='forecast'):
+        if context == 'backtest':
+            return self._last_backtest_markov_summary
+        return self._last_markov_summary
 
 def fetch_stock_data(symbol, timeframe='1m', limit=100, start_date=None, end_date=None):
     """Fetch historical stock data from yfinance with optional explicit date window."""
@@ -285,8 +436,15 @@ def create_candlestick_chart(
         )
         ax.add_patch(rect)
     
-    # Initialize the MCMC model
-    mcmc = StockPriceMCMC(df['close'], n_simulations=100, n_steps=30)
+    # Initialize the Markov-chain-aware MCMC model
+    mcmc = StockPriceMCMC(
+        df['close'],
+        n_simulations=100,
+        n_steps=30,
+        use_markov_chain=True,
+        n_regimes=3,
+        transition_smoothing=0.5,
+    )
     
     # --- Backtesting ---
     # Calculate out-of-sample error for statistics, but don't plot these paths
@@ -295,6 +453,7 @@ def create_candlestick_chart(
     # --- Forecasting ---
     # Run a new simulation from the last actual price for plotting
     forecast_paths = mcmc.simulate_future_paths()
+    regime_summary = mcmc.get_latest_markov_summary()
 
     # Create future dates for the forecast paths
     last_date = df.index[-1]
@@ -361,12 +520,17 @@ def create_candlestick_chart(
         for text in legend.get_texts():
             text.set_color('#D9D9D9')
 
-    annotation_text = (
-        "Confidence Intervals (Forecast):\n"
-        "• Orange band: 25-75th percentile (likely range)\n"
-        "• Red band: 5-95th percentile (extreme range)\n"
-        "• Blue line: Median path (central tendency)"
-    )
+    annotation_lines = [
+        "Markov-Chain Monte Carlo forecast:",
+        "- Orange band: 25-75th percentile (likely range)",
+        "- Red band: 5-95th percentile (extreme range)",
+        "- Blue line: Median path (central tendency)",
+    ]
+    if regime_summary and regime_summary.get('state_counts'):
+        dominant_idx = int(np.argmax(regime_summary['state_counts']))
+        dominant_mean = regime_summary['state_means'][dominant_idx]
+        annotation_lines.append(f"- Dominant regime #{dominant_idx} mu={dominant_mean:+.4f}")
+    annotation_text = "\n".join(annotation_lines)
     ax.text(
         0.01,
         0.99,
@@ -397,6 +561,7 @@ def create_candlestick_chart(
         'oos_worst': float(np.max(oos_rmse_per_path)) if len(oos_rmse_per_path) else None,
         'train_minutes': len(mcmc.train_prices),
         'test_minutes': len(mcmc.test_prices),
+        'regime_summary': regime_summary,
     }
 
     if show_plot:
@@ -417,6 +582,24 @@ def create_candlestick_chart(
             print("Not enough data to calculate out-of-sample error.")
         print(f"Training Set Size: {stats['train_minutes']} minutes")
         print(f"Test Set Size: {stats['test_minutes']} minutes")
+        if regime_summary and regime_summary.get('state_counts'):
+            print("\nMarkov Regime Summary:")
+            total_counts = sum(regime_summary['state_counts']) or 1
+            for idx, (mean, std, count) in enumerate(
+                zip(
+                    regime_summary['state_means'],
+                    regime_summary['state_stds'],
+                    regime_summary['state_counts'],
+                )
+            ):
+                weight = count / total_counts
+                print(
+                    f"State {idx}: mu={mean:+.5f}, sigma={std:.5f}, weight={weight:.2%}"
+                )
+            print("Transition matrix (current -> next):")
+            for idx, row in enumerate(regime_summary['transition_matrix']):
+                formatted = ' '.join(f"{prob:0.2f}" for prob in row)
+                print(f"  {idx}: {formatted}")
 
     return stats
 
@@ -557,6 +740,16 @@ class MCMCApp:
             )
         else:
             lines.append('OOS RMSE unavailable (insufficient test data)')
+        regime = stats.get('regime_summary')
+        if regime and regime.get('state_counts'):
+            counts = regime['state_counts']
+            total = sum(counts) or 1
+            dominant_state = max(range(len(counts)), key=lambda idx: counts[idx])
+            dominant_mean = regime['state_means'][dominant_state]
+            dominant_weight = counts[dominant_state] / total
+            lines.append(
+                f"Markov states: {regime['n_regimes']} (dom #{dominant_state} mu={dominant_mean:+.4f}, weight={dominant_weight:.0%})"
+            )
         lines.append(f"Train/Test minutes: {stats['train_minutes']}/{stats['test_minutes']}")
         return ' | '.join(lines)
 
