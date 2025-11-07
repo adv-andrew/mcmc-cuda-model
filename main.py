@@ -1,11 +1,11 @@
 import yfinance as yf
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+import pytz
 import numpy as np
 import pandas as pd
 
@@ -18,6 +18,10 @@ import pandas as pd
 # Initialize Alpaca API
 # api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version='v2')
 # data_api = tradeapi.REST(API_KEY, SECRET_KEY, DATA_URL, api_version='v2')
+
+EASTERN_TZ = pytz.timezone('US/Eastern')
+RTH_OPEN = time(9, 30)
+RTH_CLOSE = time(16, 0)
 
 class StockPriceMCMC:
     def __init__(
@@ -146,24 +150,6 @@ class StockPriceMCMC:
         
         return avg_rmse, rmse_per_path, test_prices_actual, backtest_paths
 
-def calculate_ema_tradingview_style(prices, period):
-    """
-    Calculate EMA using TradingView style initialization
-    - First EMA value = first price
-    - Subsequent values use standard EMA formula
-    """
-    if len(prices) == 0:
-        return pd.Series(dtype='float64')
-    
-    alpha = 2 / (period + 1)
-    ema_values = np.zeros(len(prices))
-    ema_values[0] = prices.iloc[0]
-    
-    for i in range(1, len(prices)):
-        ema_values[i] = alpha * prices.iloc[i] + (1 - alpha) * ema_values[i-1]
-    
-    return pd.Series(ema_values, index=prices.index)
-
 def fetch_stock_data(symbol, timeframe='1m', limit=100, start_date=None, end_date=None):
     """Fetch historical stock data from yfinance with optional explicit date window."""
     try:
@@ -212,11 +198,34 @@ def fetch_stock_data(symbol, timeframe='1m', limit=100, start_date=None, end_dat
             'Volume': 'volume'
         })
         
+        df = filter_regular_trading_hours(df)
+        
         return df
         
     except Exception as e:
         print(f"Error fetching data for {symbol}: {str(e)}")
         return pd.DataFrame()
+
+
+def filter_regular_trading_hours(df):
+    """Keep only 9:30-16:00 US/Eastern candles for both training and plotting."""
+    if df.empty:
+        return df
+
+    result = df.copy()
+    idx = result.index
+    if idx.tz is None:
+        idx = idx.tz_localize(EASTERN_TZ)
+    else:
+        idx = idx.tz_convert(EASTERN_TZ)
+    result.index = idx
+
+    rth = result.between_time(RTH_OPEN.strftime('%H:%M'), RTH_CLOSE.strftime('%H:%M'))
+    if rth.empty:
+        return rth
+
+    rth.index = rth.index.tz_localize(None)
+    return rth
 
 def create_candlestick_chart(
     symbol='AAPL',
@@ -258,19 +267,15 @@ def create_candlestick_chart(
     )
     ax.set_ylabel('Price', color='#D9D9D9')
 
-    date_nums = mdates.date2num(df.index.to_pydatetime())
-    if len(date_nums) > 1:
-        candle_width = (date_nums[1] - date_nums[0]) * 0.6
-    else:
-        candle_width = 0.0005
-
-    for date_num, row in zip(date_nums, df.itertuples()):
+    positions = np.arange(len(df))
+    candle_width = 0.6
+    for pos, row in zip(positions, df.itertuples()):
         color = '#26A69A' if row.close >= row.open else '#EF5350'
-        ax.plot([date_num, date_num], [row.low, row.high], color=color, linewidth=1.1, zorder=2)
+        ax.plot([pos, pos], [row.low, row.high], color=color, linewidth=1.1, zorder=2)
         body_height = row.close - row.open
         body_height = body_height if body_height != 0 else 1e-6
         rect = Rectangle(
-            (date_num - candle_width / 2, min(row.open, row.close)),
+            (pos - candle_width / 2, min(row.open, row.close)),
             candle_width,
             abs(body_height),
             facecolor=color,
@@ -279,23 +284,6 @@ def create_candlestick_chart(
             zorder=3,
         )
         ax.add_patch(rect)
-    
-    # Calculate and plot EMAs using TradingView style (proper initialization)
-    if len(df) >= 8:
-        ema_8 = calculate_ema_tradingview_style(df['close'], 8)
-        ax.plot(df.index, ema_8, color='yellow', linewidth=2, label='EMA 8')
-    
-    if len(df) >= 21:
-        ema_21 = calculate_ema_tradingview_style(df['close'], 21)
-        ax.plot(df.index, ema_21, color='orange', linewidth=2, label='EMA 21')
-    
-    if len(df) >= 50:
-        ema_50 = calculate_ema_tradingview_style(df['close'], 50)
-        ax.plot(df.index, ema_50, color='blue', linewidth=2, label='EMA 50')
-    
-    if len(df) >= 200:
-        ema_200 = calculate_ema_tradingview_style(df['close'], 200)
-        ax.plot(df.index, ema_200, color='purple', linewidth=2, label='EMA 200')
     
     # Initialize the MCMC model
     mcmc = StockPriceMCMC(df['close'], n_simulations=100, n_steps=30)
@@ -320,15 +308,17 @@ def create_candlestick_chart(
     }
     freq = freq_map.get(timeframe, '1min')
     future_dates = pd.date_range(start=last_date, periods=mcmc.n_steps + 1, freq=freq)
+    future_positions = np.arange(len(df) - 1, len(df) - 1 + mcmc.n_steps + 1)
 
     # Plot the actual values from the test set for comparison
     if not test_prices.empty:
         test_dates = df.index[-len(test_prices):]
-        ax.plot(test_dates, test_prices, color='#00FF00', linewidth=2, linestyle='--', label='Test Set Actual')
+        test_pos = positions[-len(test_prices):]
+        ax.plot(test_pos, test_prices, color='#00FF00', linewidth=2, linestyle='--', label='Test Set Actual')
 
     # Plot the forecast paths
     for i in range(min(50, forecast_paths.shape[0])):
-        ax.plot(future_dates, forecast_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
+        ax.plot(future_positions, forecast_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
     
 
     percentiles = np.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
@@ -336,7 +326,7 @@ def create_candlestick_chart(
 
 
     ax.fill_between(
-        future_dates,
+        future_positions,
         percentiles[1],
         percentiles[3],
         color='#FFA500',
@@ -344,7 +334,7 @@ def create_candlestick_chart(
         label='25th-75th Percentile (Likely)'
     )
     ax.fill_between(
-        future_dates,
+        future_positions,
         percentiles[0],
         percentiles[4],
         color='#FF0000',
@@ -352,15 +342,19 @@ def create_candlestick_chart(
         label='5th-95th Percentile (Extreme)'
     )
 
-    ax.plot(future_dates, median_path, color='#00BFFF', linewidth=3, label='Median Forecast', zorder=5)
+    ax.plot(future_positions, median_path, color='#00BFFF', linewidth=3, label='Median Forecast', zorder=5)
 
     ax.grid(color='#232733')
     ax.tick_params(colors='#D9D9D9')
     for spine in ax.spines.values():
         spine.set_color('#232733')
 
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-    fig.autofmt_xdate()
+    tick_count = min(10, len(df))
+    if tick_count > 0:
+        tick_idx = np.linspace(0, len(df) - 1, tick_count, dtype=int)
+        labels = [df.index[i].strftime('%Y-%m-%d %H:%M') for i in tick_idx]
+        ax.set_xticks(tick_idx)
+        ax.set_xticklabels(labels, rotation=45, ha='right', color='#D9D9D9')
 
     legend = ax.legend(loc='upper left', facecolor='none', edgecolor='none')
     if legend:
