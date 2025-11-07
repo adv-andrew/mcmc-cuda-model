@@ -1,9 +1,8 @@
 import yfinance as yf
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import pytz
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.patches import Rectangle
 import numpy as np
-from scipy.stats import norm
 import pandas as pd
 
 # Remove Alpaca API credentials and initialization
@@ -204,7 +203,7 @@ def fetch_stock_data(symbol, timeframe='1m', limit=100):
 
 def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days=30):
     """
-    Create an interactive candlestick chart using plotly with MCMC predictions
+    Create an interactive candlestick chart using matplotlib with Monte Carlo predictions
     """
     try:
         # Fetch data
@@ -214,58 +213,51 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
             print(f"No data available for {symbol}. The market might be closed or the symbol might be invalid.")
             return
         
-        # Create the candlestick chart
-        fig = go.Figure(data=[go.Candlestick(
-            x=df.index,
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close'],
-            increasing_line_color='#26A69A',  # Green candles
-            decreasing_line_color='#EF5350',  # Red candles,
-            name='Historical Data'
-        )])
+        # Create the candlestick chart using matplotlib
+        fig, ax = plt.subplots(figsize=(14, 8))
+        fig.patch.set_facecolor('#131722')
+        ax.set_facecolor('#131722')
+        ax.set_title(f'{symbol} Stock Price with Monte Carlo Forecast ({timeframe} data)', color='#D9D9D9', fontsize=14)
+        ax.set_ylabel('Price', color='#D9D9D9')
+
+        date_nums = mdates.date2num(df.index.to_pydatetime())
+        if len(date_nums) > 1:
+            candle_width = (date_nums[1] - date_nums[0]) * 0.6
+        else:
+            candle_width = 0.0005
+
+        for date_num, row in zip(date_nums, df.itertuples()):
+            color = '#26A69A' if row.close >= row.open else '#EF5350'
+            ax.plot([date_num, date_num], [row.low, row.high], color=color, linewidth=1.1, zorder=2)
+            body_height = row.close - row.open
+            body_height = body_height if body_height != 0 else 1e-6
+            rect = Rectangle(
+                (date_num - candle_width / 2, min(row.open, row.close)),
+                candle_width,
+                abs(body_height),
+                facecolor=color,
+                edgecolor=color,
+                alpha=0.9,
+                zorder=3,
+            )
+            ax.add_patch(rect)
         
         # Calculate and plot EMAs using TradingView style (proper initialization)
         if len(df) >= 8:
             ema_8 = calculate_ema_tradingview_style(df['close'], 8)
-            fig.add_trace(go.Scatter(
-                x=df.index, 
-                y=ema_8, 
-                mode='lines', 
-                name='EMA 8', 
-                line=dict(color='yellow', width=2)
-            ))
+            ax.plot(df.index, ema_8, color='yellow', linewidth=2, label='EMA 8')
         
         if len(df) >= 21:
             ema_21 = calculate_ema_tradingview_style(df['close'], 21)
-            fig.add_trace(go.Scatter(
-                x=df.index, 
-                y=ema_21, 
-                mode='lines', 
-                name='EMA 21', 
-                line=dict(color='orange', width=2)
-            ))
+            ax.plot(df.index, ema_21, color='orange', linewidth=2, label='EMA 21')
         
         if len(df) >= 50:
             ema_50 = calculate_ema_tradingview_style(df['close'], 50)
-            fig.add_trace(go.Scatter(
-                x=df.index, 
-                y=ema_50, 
-                mode='lines', 
-                name='EMA 50', 
-                line=dict(color='blue', width=2)
-            ))
+            ax.plot(df.index, ema_50, color='blue', linewidth=2, label='EMA 50')
         
         if len(df) >= 200:
             ema_200 = calculate_ema_tradingview_style(df['close'], 200)
-            fig.add_trace(go.Scatter(
-                x=df.index, 
-                y=ema_200, 
-                mode='lines', 
-                name='EMA 200', 
-                line=dict(color='purple', width=2)
-            ))
+            ax.plot(df.index, ema_200, color='purple', linewidth=2, label='EMA 200')
         
         # Initialize the MCMC model
         mcmc = StockPriceMCMC(df['close'], n_simulations=100, n_steps=30)
@@ -285,164 +277,68 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
         # Plot the actual values from the test set for comparison
         if not test_prices.empty:
             test_dates = df.index[-len(test_prices):]
-            fig.add_trace(go.Scatter(
-                x=test_dates,
-                y=test_prices,
-                mode='lines',
-                line=dict(color='#00FF00', width=2, dash='dash'),
-                name='Test Set Actual'
-            ))
+            ax.plot(test_dates, test_prices, color='#00FF00', linewidth=2, linestyle='--', label='Test Set Actual')
 
         # Plot the forecast paths
         for i in range(min(50, forecast_paths.shape[0])):
-            fig.add_trace(go.Scatter(
-                x=future_dates,
-                y=forecast_paths[i],
-                mode='lines',
-                line=dict(color='rgba(255, 165, 0, 0.1)', width=1), 
-                name=f'Forecast Path {i+1}',
-                showlegend=False 
-            ))
+            ax.plot(future_dates, forecast_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
         
 
         percentiles = np.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
         median_path = percentiles[2]
 
 
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[1],
-            fill=None,
-            mode='lines',
-            line=dict(
-                color='rgba(255, 165, 0, 0.08)', 
-                width=1
-            ),
-            name='25th Percentile (Likely Range)',
-            legendgroup='confidence_intervals',
-            showlegend=True
-        ))
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[3],
-            fill='tonexty',
-            mode='lines',
-            line=dict(
-                color='rgba(255, 165, 0, 0.08)', 
-                width=1
-            ),
-            name='75th Percentile (Likely Range)',
-            legendgroup='confidence_intervals',
-            showlegend=False
-        ))
-
-
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[0],
-            fill=None,
-            mode='lines',
-            line=dict(
-                color='rgba(255, 0, 0, 0.03)',
-                width=1
-            ),
-            name='5th Percentile (Extreme Range)',
-            legendgroup='confidence_intervals',
-            showlegend=True
-        ))
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[4],
-            fill='tonexty',
-            mode='lines',
-            line=dict(
-                color='rgba(255, 0, 0, 0.03)',
-                width=1
-            ),
-            name='95th Percentile (Extreme Range)',
-            legendgroup='confidence_intervals',
-            showlegend=False
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=median_path,
-            mode='lines',
-            line=dict(color='#00BFFF', width=3),
-            name='Median Forecast',
-            legendgroup='median_forecast'
-        ))
-        
-        # Update the layout
-        fig.update_layout(
-            title=f'{symbol} Stock Price with MCMC Forecast (1-Minute Data)',
-            yaxis_title='Price',
-            template='plotly_dark',
-            xaxis_rangeslider_visible=False,
-            plot_bgcolor='#131722',
-            paper_bgcolor='#131722',
-            font=dict(color='#D9D9D9'),
-            yaxis=dict(
-                gridcolor='#232733',
-                zerolinecolor='#232733',
-            ),
-            xaxis=dict(
-                gridcolor='#232733',
-                zerolinecolor='#232733',
-                type='date',
-                tickformat='%H:%M:%S'
-            ),
-            showlegend=True,
-            legend=dict(
-                bgcolor='rgba(0,0,0,0)',
-                bordercolor='rgba(0,0,0,0)',
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01
-            ),
-            annotations=[
-                dict(
-                    text="Confidence Intervals (Forecast):<br>" +
-                         "• Orange band: 25-75th percentile (likely range)<br>" +
-                         "• Red band: 5-95th percentile (extreme range)<br>" +
-                         "• Blue line: Median path (central tendency)",
-                    showarrow=False,
-                    xref="paper",
-                    yref="paper",
-                    x=0.01,
-                    y=0.99,
-                    bgcolor="rgba(0,0,0,0.5)",
-                    bordercolor="rgba(255,255,255,0.2)",
-                    borderwidth=1,
-                    borderpad=4,
-                    font=dict(size=12)
-                )
-            ]
+        ax.fill_between(
+            future_dates,
+            percentiles[1],
+            percentiles[3],
+            color='#FFA500',
+            alpha=0.08,
+            label='25th-75th Percentile (Likely)'
         )
-        
-        # # Add volume bars
-        # fig.add_trace(go.Bar(
-        #     x=df.index,
-        #     y=df['volume'],
-        #     name='Volume',
-        #     marker_color='#2962FF',
-        #     opacity=0.5,
-        #     yaxis='y2'
-        # ))
-        
-        # # Add secondary y-axis for volume
-        # fig.update_layout(
-        #     yaxis2=dict(
-        #         title='Volume',
-        #         overlaying='y',
-        #         side='right',
-        #         showgrid=False,
-        #     )
-        # )
-        
-        # Show the plot
-        fig.show()
+        ax.fill_between(
+            future_dates,
+            percentiles[0],
+            percentiles[4],
+            color='#FF0000',
+            alpha=0.02,
+            label='5th-95th Percentile (Extreme)'
+        )
+
+        ax.plot(future_dates, median_path, color='#00BFFF', linewidth=3, label='Median Forecast', zorder=5)
+
+        ax.grid(color='#232733')
+        ax.tick_params(colors='#D9D9D9')
+        for spine in ax.spines.values():
+            spine.set_color('#232733')
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        fig.autofmt_xdate()
+
+        legend = ax.legend(loc='upper left', facecolor='none', edgecolor='none')
+        if legend:
+            for text in legend.get_texts():
+                text.set_color('#D9D9D9')
+
+        annotation_text = (
+            "Confidence Intervals (Forecast):\n"
+            "• Orange band: 25-75th percentile (likely range)\n"
+            "• Red band: 5-95th percentile (extreme range)\n"
+            "• Blue line: Median path (central tendency)"
+        )
+        ax.text(
+            0.01,
+            0.99,
+            annotation_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            color='#D9D9D9',
+            verticalalignment='top',
+            bbox=dict(facecolor=(0, 0, 0, 0.5), edgecolor=(1, 1, 1, 0.2), boxstyle='round,pad=0.5')
+        )
+
+        plt.tight_layout()
+        plt.show()
 
         print("\nMCMC Prediction Statistics (30 minutes):")
         print(f"Current Price: ${df['close'].iloc[-1]:.2f}")
@@ -466,4 +362,4 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
         print(f"Error creating chart: {str(e)}")
 
 if __name__ == "__main__":
-    create_candlestick_chart('SPY', '1m', 300, mcmc_days=30) 
+    create_candlestick_chart('NVDA', '1m', 300, mcmc_days=30)
