@@ -174,13 +174,13 @@ def fetch_stock_data(symbol, timeframe='1m', limit=100, start_date=None, end_dat
         if start_date or end_date:
             if start_date:
                 start_ts = pd.to_datetime(start_date)
-                if start_ts.tzinfo is not None:
-                    start_ts = start_ts.tz_localize(None)
+                if getattr(start_ts, 'tzinfo', None) is not None:
+                    start_ts = start_ts.tz_convert(None)
                 history_kwargs['start'] = start_ts
             if end_date:
                 end_ts = pd.to_datetime(end_date)
-                if end_ts.tzinfo is not None:
-                    end_ts = end_ts.tz_localize(None)
+                if getattr(end_ts, 'tzinfo', None) is not None:
+                    end_ts = end_ts.tz_convert(None)
                 history_kwargs['end'] = end_ts
         else:
             if timeframe == '1m':
@@ -228,7 +228,14 @@ def create_candlestick_chart(
 ):
     """Render candlesticks + Monte Carlo fan chart either standalone or on a provided Matplotlib axis."""
 
-    df = fetch_stock_data(symbol, timeframe, limit, start_date=start_date, end_date=end_date)
+    effective_end = end_date or datetime.now()
+    df = fetch_stock_data(
+        symbol,
+        timeframe,
+        limit,
+        start_date=start_date,
+        end_date=effective_end,
+    )
 
     if len(df) == 0:
         raise ValueError(
@@ -424,13 +431,13 @@ class MCMCApp:
     """Tkinter front-end for interactive Monte Carlo visualization."""
 
     TIMEFRAME_CHOICES = ['1m', '5m', '15m', '30m', '1h', '1d']
-    QUICK_RANGES = {
-        'Last 1 Day': timedelta(days=1),
-        'Last 5 Days': timedelta(days=5),
-        'Last 1 Month': timedelta(days=30),
-        'Last 3 Months': timedelta(days=90),
-        'Last 6 Months': timedelta(days=180),
-        'Last 1 Year': timedelta(days=365),
+    PRESETS = {
+        '1D': {'delta': timedelta(days=1), 'timeframe': '1m', 'limit': None},
+        '5D': {'delta': timedelta(days=5), 'timeframe': '5m', 'limit': None},
+        '1M': {'delta': timedelta(days=30), 'timeframe': '30m', 'limit': None},
+        '3M': {'delta': timedelta(days=90), 'timeframe': '1h', 'limit': None},
+        '6M': {'delta': timedelta(days=180), 'timeframe': '1h', 'limit': None},
+        '1Y': {'delta': timedelta(days=365), 'timeframe': '1d', 'limit': None},
     }
 
     def __init__(self):
@@ -441,10 +448,9 @@ class MCMCApp:
         self.timeframe_var = tk.StringVar(value=self.TIMEFRAME_CHOICES[0])
         self.limit_var = tk.StringVar(value='500')
         self.start_date_var = tk.StringVar(value=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'))
-        self.end_date_var = tk.StringVar(value='')
-        self.quick_range_var = tk.StringVar(value='Last 7 Days')
 
-        self._build_controls()
+        self._build_top_controls()
+        self._build_quick_bar()
 
         self.figure, self.ax = plt.subplots(figsize=(12, 6))
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
@@ -455,55 +461,66 @@ class MCMCApp:
 
         self.root.after(100, self.update_chart)
 
-    def _build_controls(self):
+    def _build_top_controls(self):
         control_frame = ttk.Frame(self.root, padding=10)
         control_frame.pack(fill=tk.X)
 
         ttk.Label(control_frame, text='Ticker').grid(row=0, column=0, padx=5, pady=2, sticky='w')
         ttk.Entry(control_frame, textvariable=self.ticker_var, width=10).grid(row=1, column=0, padx=5)
 
-        ttk.Label(control_frame, text='Timeframe').grid(row=0, column=1, padx=5, pady=2, sticky='w')
-        timeframe_combo = ttk.Combobox(control_frame, textvariable=self.timeframe_var, values=self.TIMEFRAME_CHOICES, state='readonly', width=8)
+        ttk.Label(control_frame, text='Candle timeframe').grid(row=0, column=1, padx=5, pady=2, sticky='w')
+        timeframe_combo = ttk.Combobox(
+            control_frame,
+            textvariable=self.timeframe_var,
+            values=self.TIMEFRAME_CHOICES,
+            state='readonly',
+            width=8,
+        )
         timeframe_combo.grid(row=1, column=1, padx=5)
 
-        ttk.Label(control_frame, text='Max candles').grid(row=0, column=2, padx=5, pady=2, sticky='w')
-        ttk.Entry(control_frame, textvariable=self.limit_var, width=10).grid(row=1, column=2, padx=5)
+        ttk.Label(control_frame, text='Max candles (optional)').grid(row=0, column=2, padx=5, pady=2, sticky='w')
+        ttk.Entry(control_frame, textvariable=self.limit_var, width=12).grid(row=1, column=2, padx=5)
 
         ttk.Label(control_frame, text='Start date (YYYY-MM-DD)').grid(row=0, column=3, padx=5, pady=2, sticky='w')
         ttk.Entry(control_frame, textvariable=self.start_date_var, width=15).grid(row=1, column=3, padx=5)
 
-        ttk.Label(control_frame, text='End date (optional)').grid(row=0, column=4, padx=5, pady=2, sticky='w')
-        ttk.Entry(control_frame, textvariable=self.end_date_var, width=15).grid(row=1, column=4, padx=5)
+        ttk.Button(control_frame, text='Update Chart', command=self.update_chart).grid(row=1, column=4, padx=10)
 
-        quick_values = ['Last 7 Days'] + list(self.QUICK_RANGES.keys())
-        ttk.Label(control_frame, text='Quick range').grid(row=0, column=5, padx=5, pady=2, sticky='w')
-        quick_combo = ttk.Combobox(control_frame, textvariable=self.quick_range_var, values=quick_values, state='readonly', width=15)
-        quick_combo.grid(row=1, column=5, padx=5)
-        quick_combo.bind('<<ComboboxSelected>>', self._apply_quick_range)
-
-        ttk.Button(control_frame, text='Update Chart', command=self.update_chart).grid(row=1, column=6, padx=10)
-
-        for col in range(7):
+        for col in range(5):
             control_frame.columnconfigure(col, weight=1)
 
-    def _apply_quick_range(self, _event=None):
-        selection = self.quick_range_var.get()
-        if selection == 'Last 7 Days':
-            start = datetime.now() - timedelta(days=7)
-        else:
-            delta = self.QUICK_RANGES.get(selection)
-            if not delta:
-                return
-            start = datetime.now() - delta
+    def _build_quick_bar(self):
+        quick_frame = ttk.Frame(self.root, padding=(10, 0))
+        quick_frame.pack(fill=tk.X)
+        ttk.Label(quick_frame, text='Quick ranges').pack(side=tk.LEFT, padx=(0, 10))
+
+        for label in self.PRESETS:
+            ttk.Button(
+                quick_frame,
+                text=label,
+                command=lambda lbl=label: self._apply_preset(lbl),
+                width=6,
+            ).pack(side=tk.LEFT, padx=3, pady=5)
+
+    def _apply_preset(self, label):
+        preset = self.PRESETS.get(label)
+        if not preset:
+            return
+        start = datetime.now() - preset['delta']
         self.start_date_var.set(start.strftime('%Y-%m-%d'))
-        self.end_date_var.set('')
+        self.timeframe_var.set(preset['timeframe'])
+        if preset.get('limit') is None:
+            self.limit_var.set('')
+        else:
+            self.limit_var.set(str(preset['limit']))
+        self.update_chart()
 
     def update_chart(self):
         symbol = self.ticker_var.get().strip().upper() or 'NVDA'
         timeframe = self.timeframe_var.get()
-        limit = self._parse_int(self.limit_var.get(), default=500)
+        limit = self._parse_int(self.limit_var.get(), default=None)
         start_date = self.start_date_var.get().strip() or None
-        end_date = self.end_date_var.get().strip() or None
+        end_date = datetime.now()
 
         try:
             stats = create_candlestick_chart(
@@ -520,7 +537,12 @@ class MCMCApp:
             messagebox.showerror('Unable to update chart', str(exc))
 
     @staticmethod
-    def _parse_int(value, default=500):
+    def _parse_int(value, default=None):
+        if value is None:
+            return default
+        value = str(value).strip()
+        if value == '':
+            return default
         try:
             parsed = int(value)
             return parsed if parsed > 0 else default
