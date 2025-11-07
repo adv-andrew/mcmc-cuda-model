@@ -1,3 +1,15 @@
+import os
+import sys
+
+# Add CUDA to PATH if it exists (required for CuPy on Windows)
+cuda_paths = [
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin\x64"
+]
+for cuda_path in cuda_paths:
+    if os.path.exists(cuda_path) and cuda_path not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = cuda_path + os.pathsep + os.environ.get('PATH', '')
+
 import yfinance as yf
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -8,6 +20,64 @@ from datetime import datetime, time, timedelta
 import pytz
 import numpy as np
 import pandas as pd
+
+try:
+    import cupy as cp
+    import warnings
+    warnings.filterwarnings('ignore')
+    # Test if CuPy actually works with operations used in MCMC
+    test_zeros = cp.zeros((100, 10), dtype=float)
+    test_data = cp.array([[0.1, -0.2], [0.3, -0.1]], dtype=float)
+    test_result = cp.exp(test_data)  # This requires NVRTC
+    cp.cuda.Device(0).synchronize()
+    test_result.get()  # Transfer to verify it worked
+
+    # Define custom CUDA kernel for Markov chain state transitions
+    # This kernel simulates multiple Markov chains in parallel on GPU
+    markov_transition_kernel = cp.RawKernel(r'''
+    extern "C" __global__
+    void markov_chain_step(
+        const float* transition_matrix,  // n_states x n_states
+        const float* random_values,      // n_simulations x n_steps
+        int* state_sequence,             // n_simulations x n_steps (output)
+        const int n_simulations,
+        const int n_steps,
+        const int n_states,
+        const int initial_state
+    ) {
+        int sim_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+        if (sim_idx >= n_simulations) return;
+
+        int current_state = initial_state;
+
+        for (int step = 0; step < n_steps; step++) {
+            // Get random value for this step
+            float rand_val = random_values[sim_idx * n_steps + step];
+
+            // Use cumulative transition probabilities to select next state
+            float cumsum = 0.0f;
+            int next_state = 0;
+
+            for (int s = 0; s < n_states; s++) {
+                cumsum += transition_matrix[current_state * n_states + s];
+                if (rand_val <= cumsum) {
+                    next_state = s;
+                    break;
+                }
+            }
+
+            state_sequence[sim_idx * n_steps + step] = next_state;
+            current_state = next_state;
+        }
+    }
+    ''', 'markov_chain_step')
+
+    print(f"GPU acceleration enabled (CuPy + Custom CUDA Kernels)")
+except Exception as e:
+    cp = None
+    markov_transition_kernel = None
+    print(f"GPU acceleration disabled - using NumPy (CPU)")
 
 # Remove Alpaca API credentials and initialization
 # API_KEY = 'PK2RFDCTW8EM2NNCVD5Y'
@@ -37,6 +107,7 @@ class StockPriceMCMC:
         volatility_window=500,
         n_regimes=3,
         transition_smoothing=1.0,
+        enable_gpu=False,
     ):
         self.prices = prices
         self.n_simulations = n_simulations
@@ -50,11 +121,27 @@ class StockPriceMCMC:
         self.transition_smoothing = max(0.0, float(transition_smoothing))
         self._last_markov_summary = None
         self._last_backtest_markov_summary = None
+        self.enable_gpu = bool(enable_gpu and cp is not None)
+        self.backend_name = 'cupy' if self.enable_gpu else 'numpy'
+        self._xp = cp if self.enable_gpu else np
 
         # Split data for backtesting
         split_idx = int(len(prices) * train_ratio)
         self.train_prices = prices[:split_idx]
         self.test_prices = prices[split_idx:]
+
+    def _to_backend_array(self, array):
+        xp_mod = self._xp
+        if array is None:
+            return xp_mod.zeros((self.n_simulations, self.n_steps), dtype=float)
+        if xp_mod is np:
+            return np.asarray(array, dtype=float)
+        return xp_mod.asarray(array, dtype=float)
+
+    def _to_host(self, array):
+        if self._xp is cp:
+            return cp.asnumpy(array)
+        return array
 
     def _bootstrap_returns(self, returns_source):
         """Sample returns via (optionally block) bootstrap to preserve distributional features."""
@@ -66,34 +153,81 @@ class StockPriceMCMC:
         if returns_array.size == 0:
             return np.zeros((self.n_simulations, self.n_steps))
 
-        if self.block_size <= 1 or returns_array.size < self.block_size:
-            idx = np.random.randint(0, returns_array.size, size=(self.n_simulations, self.n_steps))
-            sampled = returns_array[idx]
+        # GPU-accelerated bootstrap
+        if self.enable_gpu:
+            xp = self._xp
+            returns_gpu = xp.asarray(returns_array, dtype=float)
+
+            if self.block_size <= 1 or returns_array.size < self.block_size:
+                # Vectorized random indexing on GPU
+                idx = xp.random.randint(0, returns_array.size, size=(self.n_simulations, self.n_steps))
+                sampled = returns_gpu[idx]
+            else:
+                # Vectorized block bootstrap on GPU
+                n_blocks_needed = int(np.ceil(self.n_steps / self.block_size))
+                # Generate random start positions for all simulations and blocks
+                start_indices = xp.random.randint(
+                    0,
+                    returns_array.size - self.block_size + 1,
+                    size=(self.n_simulations, n_blocks_needed)
+                )
+
+                # Create offset array for block sampling
+                block_offsets = xp.arange(self.block_size).reshape(1, 1, -1)
+                # Compute all indices at once: [n_simulations, n_blocks, block_size]
+                all_indices = start_indices[:, :, xp.newaxis] + block_offsets
+                # Reshape and sample
+                all_indices = all_indices.reshape(self.n_simulations, -1)[:, :self.n_steps]
+                sampled = returns_gpu[all_indices]
+
+            # Vectorized statistics on GPU
+            historical_mu = xp.mean(returns_gpu)
+            recent_idx = max(0, returns_array.size - self.drift_window)
+            recent_mu = xp.mean(returns_gpu[recent_idx:])
+            recent_vol_idx = max(0, returns_array.size - self.volatility_window)
+            historical_vol = xp.std(returns_gpu)
+            recent_vol = xp.std(returns_gpu[recent_vol_idx:])
+
+            # Vectorized centering and scaling
+            centered = sampled - historical_mu
+            if historical_vol > 0 and recent_vol > 0:
+                scale = recent_vol / historical_vol
+                centered = centered * scale
+
+            adjusted = centered + recent_mu
+            # Keep on GPU - don't transfer to CPU yet
+            return adjusted
+
+        # CPU fallback (original code)
         else:
-            sampled = np.empty((self.n_simulations, self.n_steps))
-            for sim in range(self.n_simulations):
-                steps = 0
-                while steps < self.n_steps:
-                    start = np.random.randint(0, returns_array.size - self.block_size + 1)
-                    block = returns_array[start:start + self.block_size]
-                    block_len = min(self.n_steps - steps, self.block_size)
-                    sampled[sim, steps:steps + block_len] = block[:block_len]
-                    steps += block_len
+            if self.block_size <= 1 or returns_array.size < self.block_size:
+                idx = np.random.randint(0, returns_array.size, size=(self.n_simulations, self.n_steps))
+                sampled = returns_array[idx]
+            else:
+                sampled = np.empty((self.n_simulations, self.n_steps))
+                for sim in range(self.n_simulations):
+                    steps = 0
+                    while steps < self.n_steps:
+                        start = np.random.randint(0, returns_array.size - self.block_size + 1)
+                        block = returns_array[start:start + self.block_size]
+                        block_len = min(self.n_steps - steps, self.block_size)
+                        sampled[sim, steps:steps + block_len] = block[:block_len]
+                        steps += block_len
 
-        historical_mu = returns_array.mean()
-        recent_slice = returns_array[-min(self.drift_window, returns_array.size):]
-        recent_mu = recent_slice.mean()
-        recent_vol_slice = returns_array[-min(self.volatility_window, returns_array.size):]
-        historical_vol = returns_array.std(ddof=0)
-        recent_vol = recent_vol_slice.std(ddof=0)
+            historical_mu = returns_array.mean()
+            recent_slice = returns_array[-min(self.drift_window, returns_array.size):]
+            recent_mu = recent_slice.mean()
+            recent_vol_slice = returns_array[-min(self.volatility_window, returns_array.size):]
+            historical_vol = returns_array.std(ddof=0)
+            recent_vol = recent_vol_slice.std(ddof=0)
 
-        centered = sampled - historical_mu
-        if historical_vol > 0 and recent_vol > 0:
-            scale = recent_vol / historical_vol
-            centered = centered * scale
+            centered = sampled - historical_mu
+            if historical_vol > 0 and recent_vol > 0:
+                scale = recent_vol / historical_vol
+                centered = centered * scale
 
-        adjusted = centered + recent_mu
-        return adjusted
+            adjusted = centered + recent_mu
+            return adjusted
 
     def _parametric_returns(self, returns_source):
         returns_array = returns_source.values if hasattr(returns_source, 'values') else np.asarray(returns_source)
@@ -198,36 +332,122 @@ class StockPriceMCMC:
                 state_stds.append(0.0)
 
         last_state = int(label_values[-1]) if label_values.size else None
-        rng = np.random.default_rng()
-        sampled_returns = np.zeros((self.n_simulations, self.n_steps))
         fallback_values = returns_series.values
 
-        for sim in range(self.n_simulations):
-            current_state = last_state if last_state is not None else rng.choice(n_states, p=empirical_probs)
-            for step in range(self.n_steps):
-                transition_probs = transition_matrix[current_state]
-                current_state = rng.choice(n_states, p=transition_probs)
-                sampled_returns[sim, step] = self._draw_return_for_state(
-                    current_state,
-                    state_draws,
-                    rng,
-                    fallback_values,
+        # GPU-ACCELERATED MARKOV CHAIN SAMPLING
+        if self.enable_gpu and markov_transition_kernel is not None:
+            xp = self._xp
+
+            # Generate random values on GPU for state transitions
+            random_values = xp.random.uniform(0, 1, size=(self.n_simulations, self.n_steps)).astype(xp.float32)
+
+            # Prepare transition matrix on GPU
+            transition_matrix_gpu = xp.asarray(transition_matrix, dtype=xp.float32)
+
+            # Allocate state sequence on GPU
+            state_sequence = xp.zeros((self.n_simulations, self.n_steps), dtype=xp.int32)
+
+            # Determine initial state
+            if last_state is not None:
+                initial_state = last_state
+            else:
+                initial_state = int(np.random.choice(n_states, p=empirical_probs))
+
+            # Launch custom CUDA kernel
+            threads_per_block = 256
+            blocks = (self.n_simulations + threads_per_block - 1) // threads_per_block
+
+            markov_transition_kernel(
+                (blocks,), (threads_per_block,),
+                (
+                    transition_matrix_gpu,
+                    random_values,
+                    state_sequence,
+                    self.n_simulations,
+                    self.n_steps,
+                    n_states,
+                    initial_state
                 )
+            )
 
-        summary = {
-            'n_regimes': n_states,
-            'state_counts': state_counts.astype(int).tolist(),
-            'state_means': state_means,
-            'state_stds': state_stds,
-            'transition_matrix': transition_matrix.tolist(),
-            'bin_edges': [float(edge) for edge in bin_edges],
-            'empirical_probabilities': empirical_probs.tolist(),
-            'last_state': last_state,
-        }
+            # Synchronize to ensure kernel completion
+            xp.cuda.Stream.null.synchronize()
 
-        return sampled_returns, summary
+            # Now vectorized state-to-return mapping on GPU
+            # Create a lookup table: state -> random return from that state's distribution
+            sampled_returns = xp.zeros((self.n_simulations, self.n_steps), dtype=xp.float64)
+
+            # For each state, sample returns and assign them vectorized
+            for state_idx in range(n_states):
+                state_vals = state_draws[state_idx]
+                if state_vals.size > 0:
+                    # Generate random indices for this state
+                    state_mask = (state_sequence == state_idx)
+                    n_needed = int(xp.sum(state_mask))
+
+                    if n_needed > 0:
+                        # Sample returns for this state
+                        random_indices = xp.random.randint(0, state_vals.size, size=n_needed)
+                        state_returns_gpu = xp.asarray(state_vals, dtype=xp.float64)
+                        sampled_vals = state_returns_gpu[random_indices]
+
+                        # Assign to the appropriate positions
+                        sampled_returns[state_mask] = sampled_vals
+                else:
+                    # Fallback for empty state
+                    state_mask = (state_sequence == state_idx)
+                    n_needed = int(xp.sum(state_mask))
+                    if n_needed > 0 and fallback_values.size > 0:
+                        random_indices = xp.random.randint(0, fallback_values.size, size=n_needed)
+                        fallback_gpu = xp.asarray(fallback_values, dtype=xp.float64)
+                        sampled_returns[state_mask] = fallback_gpu[random_indices]
+
+            # Keep on GPU - don't transfer yet
+            summary = {
+                'n_regimes': n_states,
+                'state_counts': state_counts.astype(int).tolist(),
+                'state_means': state_means,
+                'state_stds': state_stds,
+                'transition_matrix': transition_matrix.tolist(),
+                'bin_edges': [float(edge) for edge in bin_edges],
+                'empirical_probabilities': empirical_probs.tolist(),
+                'last_state': last_state,
+            }
+
+            return sampled_returns, summary
+
+        # CPU FALLBACK (original nested loop code)
+        else:
+            rng = np.random.default_rng()
+            sampled_returns = np.zeros((self.n_simulations, self.n_steps))
+
+            for sim in range(self.n_simulations):
+                current_state = last_state if last_state is not None else rng.choice(n_states, p=empirical_probs)
+                for step in range(self.n_steps):
+                    transition_probs = transition_matrix[current_state]
+                    current_state = rng.choice(n_states, p=transition_probs)
+                    sampled_returns[sim, step] = self._draw_return_for_state(
+                        current_state,
+                        state_draws,
+                        rng,
+                        fallback_values,
+                    )
+
+            summary = {
+                'n_regimes': n_states,
+                'state_counts': state_counts.astype(int).tolist(),
+                'state_means': state_means,
+                'state_stds': state_stds,
+                'transition_matrix': transition_matrix.tolist(),
+                'bin_edges': [float(edge) for edge in bin_edges],
+                'empirical_probabilities': empirical_probs.tolist(),
+                'last_state': last_state,
+            }
+
+            return sampled_returns, summary
 
     def _generate_returns(self, returns_source, context):
+        """Generate returns - keeps data on GPU if GPU is enabled."""
         markov_summary = None
         sampled_returns = None
 
@@ -246,19 +466,41 @@ class StockPriceMCMC:
         elif context == 'backtest':
             self._last_backtest_markov_summary = markov_summary
 
+        # Keep on GPU - don't transfer to CPU yet
         return sampled_returns
 
-    def _run_simulation(self, start_price, returns_source, context='forecast'):
-        """Simulate geometric price paths from sampled returns."""
-        paths = np.zeros((self.n_simulations, self.n_steps + 1))
-        paths[:, 0] = start_price
+    def _run_simulation(self, start_price, returns_source, context='forecast', keep_on_gpu=False):
+        """Simulate geometric price paths from sampled returns - optimized to keep data on GPU."""
+        xp = self._xp
+        paths = xp.zeros((self.n_simulations, self.n_steps + 1), dtype=float)
+        paths[:, 0] = float(start_price)
 
         sampled_returns = self._generate_returns(returns_source, context)
 
-        for t in range(1, self.n_steps + 1):
-            paths[:, t] = paths[:, t - 1] * np.exp(sampled_returns[:, t - 1])
+        # Ensure sampled_returns is on the correct backend
+        if self.enable_gpu:
+            # Already on GPU from _generate_returns
+            sampled_returns_backend = sampled_returns if xp is cp else xp.asarray(sampled_returns)
+        else:
+            sampled_returns_backend = self._to_backend_array(sampled_returns)
 
-        return paths
+        # Vectorized cumulative product for ALL paths at once - MASSIVE GPU speedup
+        # Instead of looping through timesteps, compute all at once
+        if self.enable_gpu:
+            # Use cumulative product on GPU (much faster than loop)
+            cumulative_returns = xp.exp(sampled_returns_backend)
+            cumulative_product = xp.cumprod(cumulative_returns, axis=1)
+            paths[:, 1:] = float(start_price) * cumulative_product
+        else:
+            # CPU fallback - still use loop for compatibility
+            for t in range(1, self.n_steps + 1):
+                paths[:, t] = paths[:, t - 1] * xp.exp(sampled_returns_backend[:, t - 1])
+
+        # Only transfer to CPU if requested
+        if keep_on_gpu and self.enable_gpu:
+            return paths
+        else:
+            return self._to_host(paths)
 
     def simulate_future_paths(self):
         """
@@ -385,6 +627,8 @@ def create_candlestick_chart(
     start_date=None,
     end_date=None,
     ax=None,
+    n_simulations=None,
+    use_gpu=None,
 ):
     """Render candlesticks + Monte Carlo fan chart either standalone or on a provided Matplotlib axis."""
 
@@ -436,20 +680,28 @@ def create_candlestick_chart(
         )
         ax.add_patch(rect)
     
+    gpu_available = cp is not None
+    effective_gpu = gpu_available if use_gpu is None else bool(use_gpu and gpu_available)
+    if use_gpu and not gpu_available:
+        print("Requested GPU acceleration but CuPy is unavailable; falling back to NumPy.")
+
+    # Dramatically increase simulation count for GPU - it can handle much more!
+    sim_count = n_simulations if n_simulations is not None else (50000 if effective_gpu else 1000)
     # Initialize the Markov-chain-aware MCMC model
     mcmc = StockPriceMCMC(
         df['close'],
-        n_simulations=100,
+        n_simulations=sim_count,
         n_steps=30,
         use_markov_chain=True,
         n_regimes=3,
         transition_smoothing=0.5,
+        enable_gpu=effective_gpu,
     )
-    
+
     # --- Backtesting ---
     # Calculate out-of-sample error for statistics, but don't plot these paths
     oos_rmse, oos_rmse_per_path, test_prices, backtest_paths = mcmc.calculate_out_of_sample_error()
-    
+
     # --- Forecasting ---
     # Run a new simulation from the last actual price for plotting
     forecast_paths = mcmc.simulate_future_paths()
@@ -475,12 +727,29 @@ def create_candlestick_chart(
         test_pos = positions[-len(test_prices):]
         ax.plot(test_pos, test_prices, color='#00FF00', linewidth=2, linestyle='--', label='Test Set Actual')
 
-    # Plot the forecast paths
-    for i in range(min(50, forecast_paths.shape[0])):
-        ax.plot(future_positions, forecast_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
-    
+    # GPU-ACCELERATED PERCENTILE CALCULATIONS
+    # Keep data on GPU for percentile calculations if possible
+    if effective_gpu and isinstance(forecast_paths, cp.ndarray):
+        # Calculate percentiles on GPU (much faster for large arrays)
+        percentiles_gpu = cp.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
+        percentiles = cp.asnumpy(percentiles_gpu)  # Only transfer final percentiles
 
-    percentiles = np.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
+        # For plotting sample paths, transfer only a subset to CPU
+        n_paths_to_plot = min(50, forecast_paths.shape[0])
+        sample_paths = cp.asnumpy(forecast_paths[:n_paths_to_plot])
+        for i in range(n_paths_to_plot):
+            ax.plot(future_positions, sample_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
+
+        # Keep forecast_paths on GPU for final statistics
+        expected_price_gpu = cp.mean(forecast_paths[:, -1])
+        expected_price = float(cp.asnumpy(expected_price_gpu))
+    else:
+        # CPU fallback
+        for i in range(min(50, forecast_paths.shape[0])):
+            ax.plot(future_positions, forecast_paths[i], color='#FFA500', alpha=0.08, linewidth=1)
+        percentiles = np.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
+        expected_price = float(np.mean(forecast_paths[:, -1]))
+
     median_path = percentiles[2]
 
 
@@ -546,6 +815,14 @@ def create_candlestick_chart(
     if show_plot:
         plt.show()
 
+    # Calculate final statistics (handle GPU arrays)
+    if effective_gpu and isinstance(forecast_paths, cp.ndarray):
+        # Already calculated expected_price above
+        pass
+    else:
+        # Already calculated expected_price above
+        pass
+
     stats = {
         'current_price': df['close'].iloc[-1],
         'percentiles': {
@@ -555,13 +832,15 @@ def create_candlestick_chart(
             75: percentiles[3, -1],
             95: percentiles[4, -1],
         },
-        'expected_price': float(np.mean(forecast_paths[:, -1])),
+        'expected_price': expected_price,
         'oos_rmse': float(oos_rmse) if oos_rmse is not None else None,
         'oos_best': float(np.min(oos_rmse_per_path)) if len(oos_rmse_per_path) else None,
         'oos_worst': float(np.max(oos_rmse_per_path)) if len(oos_rmse_per_path) else None,
         'train_minutes': len(mcmc.train_prices),
         'test_minutes': len(mcmc.test_prices),
         'regime_summary': regime_summary,
+        'backend': mcmc.backend_name,
+        'n_simulations': mcmc.n_simulations,
     }
 
     if show_plot:
@@ -573,6 +852,7 @@ def create_candlestick_chart(
         print(f"75th Percentile: ${stats['percentiles'][75]:.2f}")
         print(f"95th Percentile: ${stats['percentiles'][95]:.2f}")
         print(f"Expected Price: ${stats['expected_price']:.2f}")
+        print(f"Simulation backend: {stats['backend']} ({mcmc.n_simulations} paths)")
         print("\nOut-of-Sample Error Statistics (from Backtest):")
         if stats['oos_rmse'] is not None and stats['oos_rmse'] > 0:
             print(f"Average OOS RMSE: ${stats['oos_rmse']:.2f}")
@@ -750,6 +1030,7 @@ class MCMCApp:
             lines.append(
                 f"Markov states: {regime['n_regimes']} (dom #{dominant_state} mu={dominant_mean:+.4f}, weight={dominant_weight:.0%})"
             )
+        lines.append(f"Backend: {stats.get('backend', 'numpy')} ({stats.get('n_simulations', 'n/a')} paths)")
         lines.append(f"Train/Test minutes: {stats['train_minutes']}/{stats['test_minutes']}")
         return ' | '.join(lines)
 
@@ -757,6 +1038,99 @@ class MCMCApp:
         self.root.mainloop()
 
 
+def benchmark_gpu_vs_cpu(symbol='NVDA', timeframe='5m', n_simulations=10000):
+    """
+    Benchmark GPU vs CPU performance for MCMC simulations.
+
+    Args:
+        symbol: Stock ticker to test
+        timeframe: Candle timeframe
+        n_simulations: Number of simulations to run
+    """
+    import time
+
+    print("=" * 80)
+    print("GPU vs CPU BENCHMARK")
+    print("=" * 80)
+    print(f"Testing {symbol} with {n_simulations:,} simulations...")
+    print()
+
+    # Fetch data
+    df = fetch_stock_data(symbol, timeframe, limit=500)
+    if len(df) == 0:
+        print("Failed to fetch data. Market may be closed.")
+        return
+
+    # Test CPU
+    print("Running CPU benchmark...")
+    mcmc_cpu = StockPriceMCMC(
+        df['close'],
+        n_simulations=n_simulations,
+        n_steps=30,
+        use_markov_chain=True,
+        n_regimes=3,
+        enable_gpu=False,
+    )
+
+    start_cpu = time.time()
+    paths_cpu = mcmc_cpu.simulate_future_paths()
+    time_cpu = time.time() - start_cpu
+
+    print(f"CPU Time: {time_cpu:.2f} seconds")
+    print()
+
+    # Test GPU
+    if cp is not None:
+        print("Running GPU benchmark...")
+        mcmc_gpu = StockPriceMCMC(
+            df['close'],
+            n_simulations=n_simulations,
+            n_steps=30,
+            use_markov_chain=True,
+            n_regimes=3,
+            enable_gpu=True,
+        )
+
+        start_gpu = time.time()
+        paths_gpu = mcmc_gpu.simulate_future_paths()
+        # Ensure GPU operations complete
+        if isinstance(paths_gpu, cp.ndarray):
+            cp.cuda.Stream.null.synchronize()
+        time_gpu = time.time() - start_gpu
+
+        print(f"GPU Time: {time_gpu:.2f} seconds")
+        print()
+
+        speedup = time_cpu / time_gpu
+        print("=" * 80)
+        print(f"SPEEDUP: {speedup:.2f}x faster with GPU!")
+        print("=" * 80)
+        print()
+        print(f"Time saved: {time_cpu - time_gpu:.2f} seconds")
+        print(f"GPU efficiency: {(1 - time_gpu/time_cpu) * 100:.1f}% faster")
+        print()
+
+        # Recommendations
+        if speedup > 10:
+            print(f"EXCELLENT! With {speedup:.1f}x speedup, you can run {int(speedup * n_simulations):,} simulations")
+            print(f"in the same time it took CPU to run {n_simulations:,} simulations!")
+        elif speedup > 5:
+            print(f"GREAT! {speedup:.1f}x speedup enables much higher quality forecasts.")
+        elif speedup > 2:
+            print(f"GOOD! {speedup:.1f}x speedup. GPU is helping significantly.")
+        else:
+            print(f"Modest {speedup:.1f}x speedup. Try larger simulation counts for better GPU utilization.")
+
+    else:
+        print("GPU (CuPy) not available. Install CuPy to enable GPU acceleration.")
+        print("Visit: https://docs.cupy.dev/en/stable/install.html")
+
+    print()
+
+
 if __name__ == "__main__":
+    # Uncomment to run benchmark instead of GUI
+    # benchmark_gpu_vs_cpu(symbol='NVDA', timeframe='5m', n_simulations=10000)
+
     app = MCMCApp()
     app.run()

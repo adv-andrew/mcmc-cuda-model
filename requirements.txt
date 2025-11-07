@@ -4,5 +4,6 @@ pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 streamlit>=1.28.0
-datetime 
+datetime
 pytz>=2023.3
+cupy-cuda12x>=12.0.0  # For NVIDIA CUDA 12.x - adjust version for your CUDA toolkit
