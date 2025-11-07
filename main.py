@@ -17,25 +17,94 @@ import pandas as pd
 # data_api = tradeapi.REST(API_KEY, SECRET_KEY, DATA_URL, api_version='v2')
 
 class StockPriceMCMC:
-    def __init__(self, prices, n_simulations=1000, n_steps=30, train_ratio=0.8):
+    def __init__(
+        self,
+        prices,
+        n_simulations=1000,
+        n_steps=30,
+        train_ratio=0.8,
+        use_bootstrap=True,
+        block_size=5,
+        drift_window=200,
+        volatility_window=500,
+    ):
         self.prices = prices
         self.n_simulations = n_simulations
         self.n_steps = n_steps
-        
+        self.use_bootstrap = use_bootstrap
+        self.block_size = max(1, block_size)
+        self.drift_window = max(1, drift_window)
+        self.volatility_window = max(1, volatility_window)
+
         # Split data for backtesting
         split_idx = int(len(prices) * train_ratio)
         self.train_prices = prices[:split_idx]
         self.test_prices = prices[split_idx:]
-        
-    def _run_simulation(self, start_price, mu, sigma):
-        """Helper function to run a simulation with given parameters."""
+
+    def _bootstrap_returns(self, returns_source):
+        """Sample returns via (optionally block) bootstrap to preserve distributional features."""
+        if hasattr(returns_source, 'values'):
+            returns_array = returns_source.values
+        else:
+            returns_array = np.asarray(returns_source)
+
+        if returns_array.size == 0:
+            return np.zeros((self.n_simulations, self.n_steps))
+
+        if self.block_size <= 1 or returns_array.size < self.block_size:
+            idx = np.random.randint(0, returns_array.size, size=(self.n_simulations, self.n_steps))
+            sampled = returns_array[idx]
+        else:
+            sampled = np.empty((self.n_simulations, self.n_steps))
+            for sim in range(self.n_simulations):
+                steps = 0
+                while steps < self.n_steps:
+                    start = np.random.randint(0, returns_array.size - self.block_size + 1)
+                    block = returns_array[start:start + self.block_size]
+                    block_len = min(self.n_steps - steps, self.block_size)
+                    sampled[sim, steps:steps + block_len] = block[:block_len]
+                    steps += block_len
+
+        historical_mu = returns_array.mean()
+        recent_slice = returns_array[-min(self.drift_window, returns_array.size):]
+        recent_mu = recent_slice.mean()
+        recent_vol_slice = returns_array[-min(self.volatility_window, returns_array.size):]
+        historical_vol = returns_array.std(ddof=0)
+        recent_vol = recent_vol_slice.std(ddof=0)
+
+        centered = sampled - historical_mu
+        if historical_vol > 0 and recent_vol > 0:
+            scale = recent_vol / historical_vol
+            centered = centered * scale
+
+        adjusted = centered + recent_mu
+        return adjusted
+
+    def _parametric_returns(self, returns_source):
+        returns_array = returns_source.values if hasattr(returns_source, 'values') else np.asarray(returns_source)
+        if returns_array.size == 0:
+            return np.zeros((self.n_simulations, self.n_steps))
+
+        mu = returns_array.mean()
+        sigma = returns_array.std(ddof=1) if returns_array.size > 1 else 0
+        if sigma == 0:
+            sigma = 1e-6
+        return np.random.normal(loc=mu, scale=sigma, size=(self.n_simulations, self.n_steps))
+
+    def _run_simulation(self, start_price, returns_source):
+        """Simulate geometric price paths from sampled returns."""
         paths = np.zeros((self.n_simulations, self.n_steps + 1))
         paths[:, 0] = start_price
-        
+
+        sampled_returns = (
+            self._bootstrap_returns(returns_source)
+            if self.use_bootstrap
+            else self._parametric_returns(returns_source)
+        )
+
         for t in range(1, self.n_steps + 1):
-            random_returns = np.random.normal(loc=mu, scale=sigma, size=self.n_simulations)
-            paths[:, t] = paths[:, t-1] * np.exp(random_returns)
-            
+            paths[:, t] = paths[:, t - 1] * np.exp(sampled_returns[:, t - 1])
+
         return paths
 
     def simulate_future_paths(self):
@@ -44,11 +113,9 @@ class StockPriceMCMC:
         """
 
         all_returns = np.log(self.prices / self.prices.shift(1)).dropna()
-        mu = all_returns.mean()
-        sigma = all_returns.std()
         last_price = self.prices.iloc[-1]
-        
-        return self._run_simulation(last_price, mu, sigma)
+
+        return self._run_simulation(last_price, all_returns)
 
     def calculate_out_of_sample_error(self):
         """
@@ -56,15 +123,13 @@ class StockPriceMCMC:
         """
 
         train_returns = np.log(self.train_prices / self.train_prices.shift(1)).dropna()
-        train_mu = train_returns.mean()
-        train_sigma = train_returns.std()
         
         if self.train_prices.empty:
             return 0, np.array([]), pd.Series(dtype='float64'), np.array([])
             
         train_last_price = self.train_prices.iloc[-1]
 
-        backtest_paths = self._run_simulation(train_last_price, train_mu, train_sigma)
+        backtest_paths = self._run_simulation(train_last_price, train_returns)
 
         test_length = min(len(self.test_prices), self.n_steps)
         if test_length == 0:
@@ -240,8 +305,9 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
             ))
         
 
-        percentiles = np.percentile(forecast_paths, [5, 25, 75, 95], axis=0)
-        
+        percentiles = np.percentile(forecast_paths, [5, 25, 50, 75, 95], axis=0)
+        median_path = percentiles[2]
+
 
         fig.add_trace(go.Scatter(
             x=future_dates,
@@ -249,38 +315,10 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
             fill=None,
             mode='lines',
             line=dict(
-                color='rgba(255, 165, 0, 0.2)', 
+                color='rgba(255, 165, 0, 0.08)', 
                 width=1
             ),
             name='25th Percentile (Likely Range)',
-            legendgroup='confidence_intervals',
-            showlegend=True
-        ))
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[2],
-            fill='tonexty',
-            mode='lines',
-            line=dict(
-                color='rgba(255, 165, 0, 0.2)', 
-                width=1
-            ),
-            name='75th Percentile (Likely Range)',
-            legendgroup='confidence_intervals',
-            showlegend=False
-        ))
-        
-
-        fig.add_trace(go.Scatter(
-            x=future_dates,
-            y=percentiles[0],
-            fill=None,
-            mode='lines',
-            line=dict(
-                color='rgba(255, 0, 0, 0.15)',
-                width=1
-            ),
-            name='5th Percentile (Extreme Range)',
             legendgroup='confidence_intervals',
             showlegend=True
         ))
@@ -290,12 +328,49 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
             fill='tonexty',
             mode='lines',
             line=dict(
-                color='rgba(255, 0, 0, 0.15)',
+                color='rgba(255, 165, 0, 0.08)', 
+                width=1
+            ),
+            name='75th Percentile (Likely Range)',
+            legendgroup='confidence_intervals',
+            showlegend=False
+        ))
+
+
+        fig.add_trace(go.Scatter(
+            x=future_dates,
+            y=percentiles[0],
+            fill=None,
+            mode='lines',
+            line=dict(
+                color='rgba(255, 0, 0, 0.03)',
+                width=1
+            ),
+            name='5th Percentile (Extreme Range)',
+            legendgroup='confidence_intervals',
+            showlegend=True
+        ))
+        fig.add_trace(go.Scatter(
+            x=future_dates,
+            y=percentiles[4],
+            fill='tonexty',
+            mode='lines',
+            line=dict(
+                color='rgba(255, 0, 0, 0.03)',
                 width=1
             ),
             name='95th Percentile (Extreme Range)',
             legendgroup='confidence_intervals',
             showlegend=False
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=future_dates,
+            y=median_path,
+            mode='lines',
+            line=dict(color='#00BFFF', width=3),
+            name='Median Forecast',
+            legendgroup='median_forecast'
         ))
         
         # Update the layout
@@ -330,7 +405,8 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
                 dict(
                     text="Confidence Intervals (Forecast):<br>" +
                          "• Orange band: 25-75th percentile (likely range)<br>" +
-                         "• Red band: 5-95th percentile (extreme range)",
+                         "• Red band: 5-95th percentile (extreme range)<br>" +
+                         "• Blue line: Median path (central tendency)",
                     showarrow=False,
                     xref="paper",
                     yref="paper",
@@ -372,8 +448,9 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
         print(f"Current Price: ${df['close'].iloc[-1]:.2f}")
         print(f"5th Percentile: ${percentiles[0, -1]:.2f}")
         print(f"25th Percentile: ${percentiles[1, -1]:.2f}")
-        print(f"75th Percentile: ${percentiles[2, -1]:.2f}")
-        print(f"95th Percentile: ${percentiles[3, -1]:.2f}")
+        print(f"Median Forecast: ${percentiles[2, -1]:.2f}")
+        print(f"75th Percentile: ${percentiles[3, -1]:.2f}")
+        print(f"95th Percentile: ${percentiles[4, -1]:.2f}")
         print(f"Expected Price: ${np.mean(forecast_paths[:, -1]):.2f}")
         print("\nOut-of-Sample Error Statistics (from Backtest):")
         if oos_rmse > 0:
@@ -389,4 +466,4 @@ def create_candlestick_chart(symbol='AAPL', timeframe='1m', limit=100, mcmc_days
         print(f"Error creating chart: {str(e)}")
 
 if __name__ == "__main__":
-    create_candlestick_chart('NVDA', '1m', 300, mcmc_days=30) 
+    create_candlestick_chart('SPY', '1m', 300, mcmc_days=30) 
