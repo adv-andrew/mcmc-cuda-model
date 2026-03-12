@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs wc -l)",
+      "mcp__robloxstudio-mcp__create_object",
+      "mcp__robloxstudio-mcp__mass_set_property",
+      "mcp__robloxstudio-mcp__get_project_structure",
+      "mcp__robloxstudio-mcp__execute_luau",
+      "mcp__robloxstudio-mcp__start_playtest",
+      "mcp__robloxstudio-mcp__get_playtest_output",
+      "mcp__robloxstudio-mcp__stop_playtest"
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+"""Trading signal generation modules."""

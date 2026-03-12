@@ -1,0 +1,40 @@
+mcmc:
+  n_simulations: 25000
+  n_steps: 30
+  n_regimes: 3
+  transition_smoothing: 0.5
+
+signal:
+  slope_threshold: 10.0
+  mtf_min_alignment: 3
+  band_width_max: 0.05
+  regime_confidence_min: 0.6
+  signal_strength_min: 0.7
+  mtf_weight: 0.3
+  regime_weight: 0.3
+
+risk:
+  position_size_pct: 0.10
+  max_position_pct: 0.25
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.05
+  daily_loss_limit_pct: 0.05
+
+backtest:
+  train_months: 6
+  test_months: 2
+  slippage_pct: 0.0002
+  market_impact_pct: 0.0001
+  min_trades: 100
+
+llm:
+  daily_budget_usd: 2.0
+  signal_threshold: 0.75
+  max_calls_per_day: 3
+
+timeframes:
+  - "1m"
+  - "5m"
+  - "15m"
+  - "1h"
+  - "1d"

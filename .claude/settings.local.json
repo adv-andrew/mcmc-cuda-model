@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(move \"BlueprintShopService.server.lua\" \"BlueprintShopService.lua\")",
+      "Bash(mv:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:madstudioroblox.github.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(cat:*)",
+      "Bash(rg:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:create.roblox.com)",
+      "Bash(lua:*)",
+      "Bash(dir /s /b:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"selene \"\"C:/Users/Andy/Roblox/cross brainrot/crossy a brainrot/src/StarterPlayer/StarterPlayerScripts/Plot/CarryHighlightController.client.lua\"\"\")"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -Command \"(New-Object Media.SoundPlayer (Join-Path (Get-Item (git -C . rev-parse --show-toplevel)).FullName '.claude/chime.wav')).PlaySync()\""
+          }
+        ]
+      }
+    ]
+  },
+  "outputStyle": "Explanatory"
+}
