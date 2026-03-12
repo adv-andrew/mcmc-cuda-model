@@ -437,6 +437,69 @@ class MCMCIndicator:
     # Utility
     # ------------------------------------------------------------------
 
+    def generate_mtf_signal(
+        self,
+        ticker: str,
+        timeframe_data: dict,
+    ) -> dict:
+        """Generate a multi-timeframe signal by aggregating per-timeframe signals.
+
+        Parameters
+        ----------
+        ticker:
+            Instrument symbol.
+        timeframe_data:
+            Mapping of timeframe label -> DataFrame with a ``close`` column.
+
+        Returns
+        -------
+        dict
+            All keys from ``generate_signal`` for the first (or shortest)
+            timeframe, plus:
+            - ``mtf_alignment``: dict mapping each timeframe to its direction.
+            - ``mtf_score``: count of timeframes agreeing with the dominant
+              direction (range 0..n_timeframes).
+            - ``signal_strength``: original value adjusted upward when all
+              timeframes align, downward when they disagree.
+        """
+        if not timeframe_data:
+            raise ValueError("timeframe_data must not be empty.")
+
+        per_tf: dict = {}
+        for tf, df in timeframe_data.items():
+            per_tf[tf] = self.generate_signal(ticker, df, tf)
+
+        # Alignment map: timeframe -> direction
+        mtf_alignment = {tf: sig["direction"] for tf, sig in per_tf.items()}
+
+        # Count occurrences of each direction
+        direction_counts: dict = {}
+        for direction in mtf_alignment.values():
+            direction_counts[direction] = direction_counts.get(direction, 0) + 1
+
+        dominant_direction = max(direction_counts, key=lambda d: direction_counts[d])
+        mtf_score = direction_counts[dominant_direction]
+        n_timeframes = len(timeframe_data)
+
+        # Use the signal from the first timeframe as the base
+        first_tf = next(iter(timeframe_data))
+        base_signal = dict(per_tf[first_tf])
+
+        # Adjust signal_strength based on alignment ratio
+        alignment_ratio = mtf_score / n_timeframes  # 1.0 = full agreement
+        raw_strength = base_signal["signal_strength"]
+        if alignment_ratio == 1.0:
+            adjusted_strength = min(1.0, raw_strength * 1.2)
+        elif alignment_ratio >= 0.5:
+            adjusted_strength = raw_strength * alignment_ratio
+        else:
+            adjusted_strength = raw_strength * 0.5 * alignment_ratio
+
+        base_signal["signal_strength"] = round(adjusted_strength, 4)
+        base_signal["mtf_alignment"] = mtf_alignment
+        base_signal["mtf_score"] = mtf_score
+        return base_signal
+
     @staticmethod
     def _extract_prices(price_data: pd.DataFrame) -> np.ndarray:
         """Extract a 1-D numpy close-price array from a DataFrame."""
