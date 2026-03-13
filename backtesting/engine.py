@@ -129,16 +129,18 @@ class Backtester:
                             if risk.should_stop_loss(ticker)
                             else "take_profit"
                         )
+                        # Capture values BEFORE sell modifies position
+                        qty = position.quantity
+                        entry_px = entry_prices.pop(ticker, position.avg_price)
                         try:
-                            broker.sell(ticker, position.quantity, current_price)
-                            entry_px = entry_prices.pop(ticker, position.avg_price)
-                            pnl = (current_price - entry_px) * position.quantity
+                            broker.sell(ticker, qty, current_price)
+                            pnl = (current_price - entry_px) * qty
                             completed_trades.append(
                                 {
                                     "ticker": ticker,
                                     "date": str(current_date),
                                     "side": "sell",
-                                    "quantity": position.quantity,
+                                    "quantity": qty,
                                     "price": current_price,
                                     "pnl": pnl,
                                     "reason": reason,

@@ -389,20 +389,35 @@ class MCMCIndicator:
         """Compute a composite signal strength in [0, 1].
 
         Components:
-        - Slope strength: |slope| / 90  (capped at 1)
-        - Uncertainty penalty: 1 - min(band_width / band_width_max, 1)
-        - Regime confidence weighted by ``regime_weight``
-        """
-        slope_strength = min(abs(slope) / 90.0, 1.0)
-        uncertainty_factor = 1.0 - min(band_width / max(self.band_width_max, 1e-8), 1.0)
-        regime_factor = regime_confidence
+        - Slope strength: Normalized so that slopes >= slope_threshold map to
+          high values (0.7+). Uses a sigmoid-like curve centered at the threshold.
+        - Uncertainty penalty: Subtracts up to 0.15 for wide forecast bands
+        - Regime confidence: Adds a small bonus (up to 0.15) for high confidence
 
-        # Weighted composite
-        slope_wt = 1.0 - self.regime_weight
-        strength = (
-            slope_wt * slope_strength * uncertainty_factor
-            + self.regime_weight * regime_factor
-        )
+        This calibration ensures strong directional moves (30-45°) produce
+        signal_strength values above the typical 0.7 threshold required for
+        trade execution.
+        """
+        abs_slope = abs(slope)
+
+        # Slope contribution: sigmoid-like curve that reaches ~0.7 at threshold
+        # and ~0.9 at 2x threshold. Using tanh for smooth saturation.
+        # Scale so threshold maps to ~0.7 and 45° maps to ~0.85
+        normalized_slope = abs_slope / max(self.slope_threshold, 1.0)
+        # tanh(1.2) ≈ 0.83, tanh(2.4) ≈ 0.98 - good dynamic range
+        slope_strength = math.tanh(normalized_slope * 1.2) * 0.85
+
+        # Uncertainty penalty: penalize wide bands, but cap the penalty
+        # so slope can still dominate when direction is clear
+        uncertainty_ratio = min(band_width / max(self.band_width_max, 1e-8), 1.0)
+        uncertainty_penalty = uncertainty_ratio * 0.15
+
+        # Regime confidence bonus: small boost for confident regime detection
+        regime_bonus = regime_confidence * 0.15
+
+        # Composite: slope dominates, with adjustments for uncertainty and regime
+        strength = slope_strength - uncertainty_penalty + regime_bonus
+
         return max(0.0, min(1.0, float(strength)))
 
     # ------------------------------------------------------------------
@@ -423,14 +438,34 @@ class MCMCIndicator:
         regime: int,
         regime_confidence: float,
     ) -> str:
-        """Map direction + strength + regime to a suggested action."""
-        if regime_confidence < self.regime_confidence_min:
+        """Map direction + strength + regime to a suggested action.
+
+        The action is determined primarily by direction and signal_strength.
+        Regime alignment provides confirmation but is not strictly required
+        when the signal is strong enough.
+
+        - Strong signals (>= 0.7) can generate BUY/SELL based on direction alone
+        - Regime alignment boosts confidence but doesn't gate entry
+        - Very weak signals (< 0.5) always return HOLD
+        """
+        # Very weak signals always hold
+        if signal_strength < 0.5:
             return self.ACTION_HOLD
 
-        if direction == self.DIRECTION_BULLISH and regime == 2:
-            return self.ACTION_BUY
-        if direction == self.DIRECTION_BEARISH and regime == 0:
-            return self.ACTION_SELL
+        # Strong signals act on direction
+        if signal_strength >= 0.7:
+            if direction == self.DIRECTION_BULLISH:
+                return self.ACTION_BUY
+            if direction == self.DIRECTION_BEARISH:
+                return self.ACTION_SELL
+
+        # Moderate signals (0.5-0.7) require regime alignment
+        if regime_confidence >= self.regime_confidence_min:
+            if direction == self.DIRECTION_BULLISH and regime == 2:
+                return self.ACTION_BUY
+            if direction == self.DIRECTION_BEARISH and regime == 0:
+                return self.ACTION_SELL
+
         return self.ACTION_HOLD
 
     # ------------------------------------------------------------------

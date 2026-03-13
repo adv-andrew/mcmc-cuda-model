@@ -74,7 +74,7 @@ def main():
             f"Return: {m.get('total_return_pct', 0):.2f}% | "
             f"Sharpe: {m.get('sharpe_ratio', 0):.3f} | "
             f"MaxDD: {m.get('max_drawdown_pct', 0):.2f}% | "
-            f"Trades: {m.get('total_trades', 0)}"
+            f"Trades: {m.get('n_trades', 0)}"
         )
 
     all_returns = [r["metrics"].get("total_return_pct", 0) for r in results]

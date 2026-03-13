@@ -1,4 +1,8 @@
-"""Paper trading loop: fetch data, generate signals, execute trades, sleep 5 minutes."""
+"""Paper trading loop: fetch data, generate signals, execute trades, sleep 5 minutes.
+
+Uses multi-timeframe (MTF) confirmation: requires 1h and 1d signals to align
+before taking a trade. This reduces false signals and improves win rate.
+"""
 
 import sys
 sys.path.insert(0, ".")
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 TICKERS_CONFIG_PATH = "config/tickers.yaml"
 DEFAULT_CONFIG_PATH = "config/default.yaml"
 SLEEP_SECONDS = 300  # 5 minutes
+MTF_TIMEFRAMES = ["1h", "1d"]  # Multi-timeframe: hourly + daily must align
 
 
 def load_tickers() -> list:
@@ -87,30 +92,56 @@ def main():
                 logger.info("Risk limits reached, skipping entries.")
                 break
 
+            # Fetch multi-timeframe data
             try:
-                signal = indicator.generate_signal(ticker, df, "1d")
+                mtf_data = {}
+                for tf in MTF_TIMEFRAMES:
+                    days = 90 if tf == "1d" else 7  # 7 days of hourly data
+                    tf_df = loader.fetch(ticker, timeframe=tf, days=days, use_cache=False)
+                    if not tf_df.empty and len(tf_df) >= 5:
+                        mtf_data[tf] = tf_df
+
+                if len(mtf_data) < 2:
+                    # Fall back to daily only if hourly unavailable
+                    signal = indicator.generate_signal(ticker, df, "1d")
+                    mtf_aligned = True  # No MTF check possible
+                    mtf_info = "1d only"
+                else:
+                    # Use MTF signal with alignment requirement
+                    signal = indicator.generate_mtf_signal(ticker, mtf_data)
+                    mtf_alignment = signal.get("mtf_alignment", {})
+                    mtf_score = signal.get("mtf_score", 0)
+
+                    # Require ALL timeframes to agree for entry
+                    directions = list(mtf_alignment.values())
+                    mtf_aligned = len(set(directions)) == 1 and directions[0] != "NEUTRAL"
+                    mtf_info = f"1h={mtf_alignment.get('1h', '?')} 1d={mtf_alignment.get('1d', '?')}"
+
             except Exception as exc:
                 logger.warning("Signal generation failed for %s: %s", ticker, exc)
                 continue
 
             logger.info(
-                "%s: action=%s strength=%.3f regime=%s",
+                "%s: action=%s strength=%.3f regime=%s MTF=[%s] aligned=%s",
                 ticker,
                 signal["suggested_action"],
                 signal["signal_strength"],
-                signal.get("regime", "unknown"),
+                signal.get("regime", "?"),
+                mtf_info,
+                mtf_aligned,
             )
 
             if (
                 signal["suggested_action"] == "BUY"
                 and signal["signal_strength"] >= signal_strength_min
+                and mtf_aligned
                 and broker.get_position(ticker) is None
             ):
                 qty = risk.calculate_position_size(ticker, current_price, signal["signal_strength"])
                 if qty > 0:
                     try:
                         broker.buy(ticker, qty, current_price)
-                        logger.info("BUY %d shares of %s @ %.2f", qty, ticker, current_price)
+                        logger.info("BUY %d shares of %s @ %.2f (MTF confirmed)", qty, ticker, current_price)
                     except ValueError as exc:
                         logger.warning("Buy failed for %s: %s", ticker, exc)
 

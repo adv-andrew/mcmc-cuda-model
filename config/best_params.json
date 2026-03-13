@@ -1,0 +1,11 @@
+{
+  "params": {
+    "slope_threshold": 15.0,
+    "n_regimes": 3,
+    "n_simulations": 25000,
+    "signal_strength_min": 0.65,
+    "position_size_pct": 0.08,
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.12
+  }
+}
