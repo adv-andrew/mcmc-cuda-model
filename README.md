@@ -2,19 +2,6 @@
 
 Monte Carlo Markov Chain trading system for options. Uses regime-switching simulations to generate probabilistic price forecasts and high-probability options signals.
 
-## Backtested Performance (2022-2025)
-
-| Metric | Value |
-|--------|-------|
-| **Total Trades** | 40 |
-| **Win Rate** | 60% |
-| **Profit Factor** | 5.5x |
-| **Total Return** | +1012% |
-
-*Backtest uses 10% position sizing, ATM options, 35 DTE, +80% TP / -35% SL*
-
----
-
 ## Quick Start
 
 ```bash
