@@ -38,3 +38,32 @@ timeframes:
   - "15m"
   - "1h"
   - "1d"
+
+# Options Swing Strategy (trading/options_swing.py) - buy dips in uptrends
+# with call debit spreads on index ETFs; typical hold 3-7 trading days.
+# Chosen on 2011-2019 data, validated on 2020-present; see
+# docs/OPTIONS_SWING_STRATEGY.md before changing anything here.
+options_swing:
+  symbols: [SPY, QQQ, IWM]
+  # entry: close > SMA200, pullback >= min_pullback_atr, plus any trigger
+  rsi2_max: 10.0
+  ibs_max: 0.25
+  ibs_rsi2_max: 15.0
+  bb_z_max: -2.0
+  min_pullback_atr: 1.5
+  deep_pullback_atr: 2.0
+  require_weekly_trend: false
+  # structure: buy long_delta call, sell short_delta call, ~dte calendar days
+  dte: 21
+  long_delta: 0.55
+  short_delta: 0.30
+  # exits
+  min_hold: 3
+  max_hold: 7
+  profit_target: 0.60   # fraction of the spread's max profit
+  # portfolio
+  risk_per_trade: 0.05  # debit paid as a fraction of equity
+  max_concurrent: 2
+  # confidence tiers (score is 40 / 70 / 100; see confidence_score)
+  high_confidence: 100
+  medium_confidence: 70
