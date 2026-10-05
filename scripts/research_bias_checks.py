@@ -193,7 +193,10 @@ def main() -> None:
                      entry_delay=1, exit_delay=1)
     scenarios = {
         "base": Scenario(),
-        "steeper call skew (0.25)": Scenario(skew=SkewModel(call_slope=0.25)),
+        "call skew 0.05 (flatter)": Scenario(skew=SkewModel(call_slope=0.05)),
+        "call skew 0.15": Scenario(skew=SkewModel(call_slope=0.15)),
+        "call skew 0.20": Scenario(skew=SkewModel(call_slope=0.20)),
+        "call skew 0.25 (steep)": Scenario(skew=SkewModel(call_slope=0.25)),
         "pay +10% IV at entry": Scenario(entry_iv_mult=1.10),
         "1.5x bid/ask": Scenario(cost_mult=1.5),
         "enter AND exit 1 day late": Scenario(entry_delay=1, exit_delay=1),
@@ -223,7 +226,7 @@ def main() -> None:
         taken = {s: base_all[s].loc[strategy_days(sigs[s].reindex(base_all[s].index,
                                                                    fill_value=False),
                                                   base_all[s].held)] for s in dfs}
-        allt = pd.concat(taken.values())
+        allt = pd.concat(taken.values()).sort_index()
         print(f"\n  Underlying only (no options), same days: {stats(allt.und_ret)}")
         for pool_name, pool_fn in {
             "random days, any trend": lambda f: pd.Series(True, index=f.index),
