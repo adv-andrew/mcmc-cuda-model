@@ -89,20 +89,37 @@ def test_next_expiry_is_a_friday_at_least_dte_out():
         assert 21 <= (e - d).days < 28
 
 
-def test_ticket_is_a_call_debit_spread():
+def test_ticket_default_is_itm_call():
     f = _feature_row(rsi2=4.0, ibs=0.1, vix=18.0, vix_ratio10=1.2)
     t = build_ticket("SPY", f, 0.18, SwingConfig())
+    assert t.short_strike is None and t.max_profit is None
+    assert t.long_strike < t.spot  # in the money
+    assert 0.62 <= t.long_delta <= 0.78
+    assert t.est_debit > t.spot - t.long_strike  # intrinsic plus some time value
+    assert t.take_profit_value == pytest.approx(1.6 * t.est_debit, abs=0.02)
+
+
+def test_ticket_call_debit_spread_option():
+    f = _feature_row(rsi2=4.0, ibs=0.1, vix=18.0, vix_ratio10=1.2)
+    cfg = SwingConfig(structure_kind="call_debit_spread", dte=21, long_delta=0.55)
+    t = build_ticket("SPY", f, 0.18, cfg)
     assert t.long_strike < t.short_strike
     assert 0 < t.est_debit < t.short_strike - t.long_strike
     assert t.max_profit == pytest.approx(t.short_strike - t.long_strike - t.est_debit, abs=0.02)
     assert 0.45 <= t.long_delta <= 0.65
 
 
+def test_unknown_structure_rejected():
+    with pytest.raises(ValueError):
+        SwingConfig(structure_kind="iron_condor").structure()
+
+
 def test_config_loads_from_yaml():
     cfg = SwingConfig.from_yaml("config/default.yaml")
     assert cfg.symbols == ("SPY", "QQQ", "IWM")
     assert cfg.min_hold == 3
-    assert cfg.structure().kind == "call_debit_spread"
+    assert cfg.structure().kind == "long_call"
+    assert cfg.long_delta == 0.70 and cfg.dte == 30
 
 
 # ----------------------------------------------------------------------

@@ -97,10 +97,9 @@ def main() -> None:
     tf["period"] = np.where(tf.entry_date < pd.Timestamp(SPLIT), "IS", "OOS")
 
     print("=" * 78)
-    print("OPTIONS SWING STRATEGY - call debit spreads on dips in uptrends (SPY/QQQ/IWM)")
+    print("OPTIONS SWING STRATEGY - buy the dip in an uptrend with calls (SPY/QQQ/IWM)")
     print("=" * 78)
-    print(f"Structure: {cfg.structure().label()}  | exits: +{cfg.profit_target:.0%} of max "
-          f"profit, close>SMA5 after {cfg.min_hold}d, max {cfg.max_hold}d")
+    print(f"Structure: {cfg.structure().label()}  | exits: +{cfg.profit_target:.0%} take-profit, close>SMA5 after {cfg.min_hold}d, max {cfg.max_hold}d")
     print(f"Sizing: {cfg.risk_per_trade:.0%} of equity at risk per trade, "
           f"max {cfg.max_concurrent} concurrent")
     full, is_, oos = res.stats(START), res.stats(START, SPLIT), res.stats(SPLIT)

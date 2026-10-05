@@ -1,8 +1,8 @@
-"""Today's Options Swing signals (call debit spreads on SPY/QQQ/IWM dips).
+"""Today's Options Swing signals (ITM calls on SPY/QQQ/IWM dips).
 
 Run this ~15 minutes before the close. For each ETF it prints whether the
-entry setup is live, the confidence score, and a concrete spread ticket
-(strikes, expiry, estimated debit, take-profit value) plus the exit plan.
+entry setup is live, the confidence score, and a concrete order ticket
+(strike(s), expiry, estimated debit, take-profit value) plus the exit plan.
 
 Usage:
     python scripts/options_swing_signals.py [--json]
@@ -42,7 +42,7 @@ def main() -> None:
     last = max(pd.Timestamp(v["date"]) for v in result.values())
     vix_last = data["VIX"].index[-1]
     print("=" * 72)
-    print("OPTIONS SWING SIGNALS  -  buy the dip in an uptrend (call debit spreads)")
+    print(f"OPTIONS SWING SIGNALS  -  buy the dip in an uptrend ({cfg.structure_kind})")
     print("=" * 72)
     print(f"Data through {last.date()}  |  VIX data through {vix_last.date()}"
           + ("  (stale: IV estimated from realized vol)" if (last - vix_last).days > 3 else ""))
@@ -58,19 +58,24 @@ def main() -> None:
             t = st["ticket"]
             print(f"  >> ENTRY  confidence {t['confidence']}/100 ({t['tier']})")
             print(f"     BUY  {sym} {t['expiry']} {t['long_strike']:g} CALL  (~{t['long_delta']:.2f} delta)")
-            print(f"     SELL {sym} {t['expiry']} {t['short_strike']:g} CALL")
-            print(f"     est. debit ${t['est_debit']:.2f}/sh (${t['est_debit'] * 100:.0f}/spread), "
-                  f"max profit ${t['max_profit']:.2f}/sh, model IV {t['atm_iv']:.1%}")
-            print(f"     take profit when spread is worth ${t['take_profit_value']:.2f} "
-                  f"(+{cfg.profit_target:.0%} of max profit)")
+            if t["short_strike"] is not None:
+                print(f"     SELL {sym} {t['expiry']} {t['short_strike']:g} CALL")
+            unit = "spread" if t["short_strike"] is not None else "contract"
+            cap = (f"max profit ${t['max_profit']:.2f}/sh" if t["max_profit"] is not None
+                   else "max loss = debit")
+            print(f"     est. debit ${t['est_debit']:.2f}/sh (${t['est_debit'] * 100:.0f}/{unit}), "
+                  f"{cap}, model IV {t['atm_iv']:.1%}")
+            target = "of max profit" if t["max_profit"] is not None else "gain"
+            print(f"     take profit when the position is worth ${t['take_profit_value']:.2f} "
+                  f"(+{cfg.profit_target:.0%} {target})")
             print(f"     why: {', '.join(t['reasons'])}")
         print(f"     if already holding: exit signal (close > 5-day SMA) = "
               f"{'YES' if st['exit_signal_if_held'] else 'no'}")
 
     print("\nExit plan for every position: take profit at "
-          f"{cfg.profit_target:.0%} of max profit, otherwise exit at the first close above "
+          f"+{cfg.profit_target:.0%}, otherwise exit at the first close above "
           f"the 5-day SMA once held >= {cfg.min_hold} days, and always by day {cfg.max_hold}.")
-    print(f"Size: risk {cfg.risk_per_trade:.0%} of the account per spread (the debit is the "
+    print(f"Size: risk {cfg.risk_per_trade:.0%} of the account per position (the debit is the "
           f"max loss), at most {cfg.max_concurrent} open at once.")
     print("Prices are model estimates - check the live bid/ask and pay no more than "
           "~5% above the estimated debit.")

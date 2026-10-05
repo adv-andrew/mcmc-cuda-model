@@ -40,7 +40,7 @@ timeframes:
   - "1d"
 
 # Options Swing Strategy (trading/options_swing.py) - buy dips in uptrends
-# with call debit spreads on index ETFs; typical hold 3-7 trading days.
+# with in-the-money calls on index ETFs; typical hold 3-7 trading days.
 # Chosen on 2011-2019 data, validated on 2020-present; see
 # docs/OPTIONS_SWING_STRATEGY.md before changing anything here.
 options_swing:
@@ -53,16 +53,19 @@ options_swing:
   min_pullback_atr: 1.5
   deep_pullback_atr: 2.0
   require_weekly_trend: false
-  # structure: buy long_delta call, sell short_delta call, ~dte calendar days
-  dte: 21
-  long_delta: 0.55
+  # structure: long_call (default) buys one ~long_delta call; call_debit_spread
+  # also sells a short_delta call. The single ITM call was the most robust in
+  # the bias checks (untouched 1991-2009 data, harsher skew/cost assumptions).
+  structure_kind: long_call
+  dte: 30
+  long_delta: 0.70
   short_delta: 0.30
   # exits
   min_hold: 3
   max_hold: 7
-  profit_target: 0.60   # fraction of the spread's max profit
+  profit_target: 0.60   # gain on the debit (spreads: fraction of max profit)
   # portfolio
-  risk_per_trade: 0.05  # debit paid as a fraction of equity
+  risk_per_trade: 0.05  # debit paid (= max loss) as a fraction of equity
   max_concurrent: 2
   # confidence tiers (score is 40 / 70 / 100; see confidence_score)
   high_confidence: 100

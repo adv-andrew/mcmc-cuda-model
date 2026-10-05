@@ -8,8 +8,12 @@ Research summary (see docs/OPTIONS_SWING_STRATEGY.md and scripts/research_*):
   out-of-sample (2020-2026). Momentum-continuation and bearish setups are
   not, which is why the old trend-following MCMC slope had negative skill.
 - Of the option structures tested with realistic pricing (VIX-based IV,
-  skew, spreads, commissions), call debit spreads monetize the bounce best;
-  credit spreads win more often but lose money after costs on 3-5 day holds.
+  skew, spreads, commissions), a single in-the-money call (~0.70 delta,
+  ~30 DTE) is the most robust: it was profitable on untouched 1991-2009
+  S&P 500 data and barely affected by the skew assumption. The 0.55/0.30
+  call debit spread scored higher on 2011-2026 but its edge depended on how
+  the short call is priced and faded on 1991-2009 (scripts/research_bias_checks.py).
+  Credit spreads win more often but lose money after costs on 3-5 day holds.
 - A pullback of at least 1.5 ATR from the 5-day high is the confirmation
   filter with the strongest in-sample evidence. Multi-timeframe alignment
   (21-day / weekly / monthly up while the 5-day move is down) and a calm
@@ -22,7 +26,8 @@ Entry (at the close, signal computed a few minutes before the bell):
     any of: RSI(2) < 10 | (IBS < 0.25 and RSI(2) < 15) | close < lower
     Bollinger(20, 2) | pullback >= 2 ATR
 Position:
-    Buy ~0.55-delta call, sell ~0.30-delta call, ~21 calendar days to expiry.
+    Buy a ~0.70-delta call, nearest Friday expiry >= 30 calendar days out
+    (optionally a 0.55/0.30 call debit spread via ``structure_kind``).
 Exit (checked at each close):
     +60% of max profit  |  close > SMA(5) after >= 3 trading days held  |
     7 trading days held  |  expiry
@@ -62,10 +67,11 @@ class SwingConfig:
     min_pullback_atr: float = 1.5
     deep_pullback_atr: float = 2.0
     require_weekly_trend: bool = False
-    # structure
-    dte: int = 21
-    long_delta: float = 0.55
-    short_delta: float = 0.30
+    # structure: "long_call" (default, most robust) or "call_debit_spread"
+    structure_kind: str = "long_call"
+    dte: int = 30
+    long_delta: float = 0.70
+    short_delta: float = 0.30  # only used by call_debit_spread
     # exits
     min_hold: int = 3
     max_hold: int = 7
@@ -90,7 +96,9 @@ class SwingConfig:
         return cls(**known)
 
     def structure(self) -> StructureSpec:
-        return StructureSpec("call_debit_spread", dte=self.dte,
+        if self.structure_kind not in ("long_call", "call_debit_spread"):
+            raise ValueError(f"unsupported structure_kind {self.structure_kind!r}")
+        return StructureSpec(self.structure_kind, dte=self.dte,
                              long_delta=self.long_delta, short_delta=self.short_delta)
 
     def exits(self) -> ExitRules:
@@ -171,10 +179,10 @@ class TradeTicket:
     confidence: int
     tier: str
     long_strike: float
-    short_strike: float
+    short_strike: Optional[float]  # None for a single call
     expiry: str
     est_debit: float
-    max_profit: float
+    max_profit: Optional[float]    # None (unbounded) for a single call
     take_profit_value: float
     atm_iv: float
     long_delta: float
@@ -194,7 +202,7 @@ def build_ticket(
     symbol: str, f: pd.DataFrame, atm_iv: float, cfg: SwingConfig,
     skew: Optional[SkewModel] = None,
 ) -> TradeTicket:
-    """Concrete call debit spread for the latest row of ``f``."""
+    """Concrete option order (single call or call spread) for the latest row of ``f``."""
     skew = skew or SkewModel()
     row = f.iloc[-1]
     date = f.index[-1]
@@ -226,11 +234,12 @@ def build_ticket(
         confidence=score,
         tier=confidence_tier(score, cfg),
         long_strike=float(legs[0].strike),
-        short_strike=float(legs[1].strike),
+        short_strike=float(legs[1].strike) if len(legs) > 1 else None,
         expiry=str(expiry.date()),
         est_debit=round(pos.max_loss, 2),
-        max_profit=round(pos.max_profit, 2),
-        take_profit_value=round(pos.max_loss + cfg.profit_target * pos.max_profit, 2),
+        max_profit=None if math.isinf(pos.max_profit) else round(pos.max_profit, 2),
+        take_profit_value=round(pos.max_loss + cfg.profit_target * (
+            pos.max_loss if math.isinf(pos.max_profit) else pos.max_profit), 2),
         atm_iv=round(atm_iv, 4),
         long_delta=round(bs_delta(spot, legs[0].strike, t, atm_iv, rate, True), 2),
         reasons=reasons,
