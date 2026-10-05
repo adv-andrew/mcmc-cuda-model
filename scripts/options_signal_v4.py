@@ -1,4 +1,7 @@
-"""OPTIONS SIGNAL GENERATOR V4 - Production Ready
+"""DEPRECATED: see scripts/options_swing_signals.py and
+docs/OPTIONS_SWING_STRATEGY.md for the validated replacement.
+
+OPTIONS SIGNAL GENERATOR V4 - Production Ready
 
 Backtested Results (2022-2025):
 - 40 trades

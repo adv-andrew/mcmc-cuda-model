@@ -1,4 +1,9 @@
-"""Options Backtest V4 - Looser regime filter but more signals.
+"""DEPRECATED: results from this script are not reliable. It prices options as
+``intrinsic + 0.4 * realized_vol * sqrt(T)`` (no implied-vol premium, no skew,
+no bid/ask or commissions) on ~40 trades. Use scripts/backtest_options_swing.py,
+which uses VIX-based implied vol, skew, costs and in/out-of-sample splits.
+
+Options Backtest V4 - Looser regime filter but more signals.
 
 V3 was too restrictive (only STRONG regimes). This version:
 - Allows trading in BULL and BEAR (not just STRONG)

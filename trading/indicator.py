@@ -28,6 +28,15 @@ class MCMCIndicator:
 
     Runs Monte Carlo price-path simulations to produce a directional signal
     (slope in degrees), regime classification, and a composite signal strength.
+
+    Caution (scripts/research_mcmc_audit.py): the simulation is GBM with the
+    sample-mean drift, so the median path - and therefore the slope - is a
+    deterministic extrapolation of recent drift. Walk-forward on SPY/QQQ/IWM
+    2011-2026 its slope had a *negative* rank IC (about -0.05 to -0.12) with
+    3-5 day forward returns, and SELL signals were followed by up-moves
+    53-62% of the time: at short horizons a steep slope marks a stretched market
+    that tends to mean-revert. For options entries use
+    ``trading.options_swing`` instead.
     """
 
     DIRECTION_BULLISH = "BULLISH"

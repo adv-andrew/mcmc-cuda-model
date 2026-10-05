@@ -1,4 +1,8 @@
-"""Get options signals NOW - even in neutral markets.
+"""DEPRECATED: the momentum-continuation MCMC signals used here had negative
+short-horizon predictive skill in walk-forward testing (see
+scripts/research_mcmc_audit.py). Use scripts/options_swing_signals.py.
+
+Get options signals NOW - even in neutral markets.
 
 This is the "I want a trade today" version.
 Shows best signals but with confidence levels.

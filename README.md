@@ -1,210 +1,125 @@
 # MCMC Options Trading System
 
-Monte Carlo Markov Chain trading system for options. Uses regime-switching simulations to generate probabilistic price forecasts and high-probability options signals.
+Monte Carlo research and trading toolkit for options. The main strategy is
+the **Options Swing Strategy**: call debit spreads on SPY / QQQ / IWM, bought
+when an index ETF pulls back sharply inside a long-term uptrend, and held
+about 3-7 trading days until it recovers.
+
+> Full research write-up: [`docs/OPTIONS_SWING_STRATEGY.md`](docs/OPTIONS_SWING_STRATEGY.md)
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
 
-# Get today's options signals
-python scripts/options_now.py
+# Today's signals (run ~15 min before the close)
+python scripts/options_swing_signals.py
 
-# Run options backtest
-python scripts/backtest_options_v4.py
+# Full backtest with in/out-of-sample split, stress tests, Monte Carlo sizing
+python scripts/backtest_options_swing.py
 ```
+
+Data comes from public GitHub mirrors (daily SPY/QQQ/IWM/AAPL/NVDA + CBOE VIX)
+and falls back to yfinance, so it also works where Yahoo is blocked.
 
 ---
 
-## How to Use the Strategy
+## The Strategy in One Screen
 
-### The System
+| | Rule |
+|---|---|
+| **Universe** | SPY, QQQ, IWM |
+| **Setup** | Close > 200-day SMA **and** ≥ 1.5 ATR below the 5-day high |
+| **Trigger** (any) | RSI(2) < 10 · IBS < 0.25 with RSI(2) < 15 · close < lower Bollinger(20, 2) · pullback ≥ 2 ATR |
+| **Position** | Buy ~0.55Δ call / sell ~0.30Δ call, nearest Friday ≥ 21 days out |
+| **Exit** | First close above the 5-day SMA after ≥ 3 days held · or day 7 · or +60% of max profit |
+| **Size** | 5% of equity per spread (debit = max loss), max 2 open |
+| **Confidence** | 40 base, +30 if 21-day/weekly/monthly trends are all up, +30 if 20-day realized vol < 15%. HIGH = 100 |
 
-1. **MCMC simulates 25,000 price paths** to predict direction
-2. **Filters for high-probability setups** (strength, slope, momentum, regime)
-3. **Outputs ranked options signals** with confidence scores
+### Backtest (realistic pricing: VIX-based IV, skew, bid/ask, commissions)
 
-### Your Weekly Routine
+| Period | Trades | Win | Avg return on risk | Profit factor | CAGR | Max DD | Sharpe |
+|---|---|---|---|---|---|---|---|
+| 2011-2019 (rules chosen here) | 212 | 67% | +8.2% | 1.72 | +9.4% | −20.3% | 0.73 |
+| 2020-2026 (held out) | 144 | 64% | +7.9% | 1.66 | +8.2% | −15.6% | 0.71 |
+| HIGH confidence only, 2020-2026 | 44 | 82% | +23.1% | 6.34 | +7.7% | −7.2% | 1.31 |
 
-| Day | Action |
-|-----|--------|
-| **Monday AM** | Run `python scripts/options_now.py` |
-| **If signal 70+** | Buy ATM option, ~35 DTE |
-| **Set alerts** | +80% take profit, -35% stop loss |
-| **Wait** | Let it play out |
+Average hold is 4 trading days, at about 23 trades a year. All 36 neighboring
+parameter settings are profitable in both periods. The edge **does not
+survive 3× normal bid/ask costs**, so always use limit orders near the mid.
 
-### Position Sizing
+### What the research found
 
-| Rule | Value |
-|------|-------|
-| Position size | 10% of portfolio per trade |
-| Max positions | 3-4 open at once |
-| Strike | ATM (at the money) |
-| Expiration | 30-40 DTE |
-
-### Exit Rules
-
-| Condition | Action |
-|-----------|--------|
-| Option up +80% | **Sell - Take Profit** |
-| Option down -35% | **Sell - Stop Loss** |
-| 30+ days held | **Sell - Time Exit** |
-
-### Example ($10,000 Account)
-
-```
-Monday:
-  1. Run: python scripts/options_now.py
-  2. Output: "HD $339 PUT - Confidence 72/100"
-  3. Buy 2x HD $339 PUT @ $4.80 = $960
-  4. Set alerts: TP at $8.64 (+80%), SL at $3.12 (-35%)
-  5. Done. Check again next Monday.
-
-Outcome A: HD drops, option hits $9.00 → Sell → +87% win
-Outcome B: HD rises, option hits $3.00 → Sell → -37% loss
-Outcome C: 30 days pass → Sell at market → Variable
-```
-
-### Key Rules
-
-- **Only buy on Monday/Tuesday** (avoid weekend theta decay)
-- **ATM strikes only** (higher probability than OTM)
-- **Same dollar amount per trade** (not same # of contracts)
-- **Max 4 positions** at once
-- **Different tickers** (don't stack same stock)
+- **The original MCMC slope signal predicts the opposite direction** at
+  3-5 days: rank IC −0.05 to −0.12, and SELL signals were followed by
+  up-moves 53-62% of the time. That's because its GBM median just
+  extrapolates recent drift.
+- Of 34 trader setups tested, **dips inside uptrends** reliably beat the
+  baseline, both in-sample and out-of-sample. Breakouts and trend stacks ≈
+  baseline. **Every bearish setup lost money.**
+- **Put credit spreads win 70-87% of the time but lose money** on 3-5 day
+  holds after costs and skew. **Call debit spreads** capture the bounce best.
+- Single-stock options (AAPL, NVDA) under the same rules lose to their
+  wider spreads. Trade the index ETFs.
 
 ---
 
 ## Commands
 
 | Command | Description |
-|---------|-------------|
-| `python scripts/options_now.py` | Get today's signals with confidence scores |
-| `python scripts/options_signal_v4.py` | Conservative - only shows signals in clear regimes |
-| `python scripts/backtest_options_v4.py` | Run full backtest (2022-2025) |
-| `python scripts/get_signals.py` | Stock signals (not options) |
-| `python scripts/run_backtest.py` | Stock backtest |
+|---|---|
+| `python scripts/options_swing_signals.py` | **Today's signals** with spread tickets and exit status |
+| `python scripts/backtest_options_swing.py` | Backtest, per-year/tier tables, stress tests, Monte Carlo sizing |
+| `python scripts/research_strategy_lab.py` | Event study: 34 setups × 1/2/3/5/10-day holds, IS vs OOS |
+| `python scripts/research_options_structures.py [--stocks]` | Long calls vs debit spreads vs credit spreads |
+| `python scripts/research_filters.py` | All 16 combinations of the confirmation filters |
+| `python scripts/research_mcmc_audit.py` | Walk-forward skill of the MCMC models |
+| `python scripts/get_signals.py` / `run_backtest.py` | Legacy stock signals / stock backtest |
 
----
+`options_now.py`, `options_signal_v4.py` and `backtest_options_v4.py` are
+**deprecated**. Their option model (`intrinsic + 0.4·RV·√T`, no implied-vol
+premium, no skew, no costs) overstated results.
 
-## Understanding the Output
-
-```
-#1 HD PUT | Confidence: 72/100 (HIGH)
-   Strike: $339 ATM | Exp: ~Apr 17
-   Price: $338.93 | Vol: 23%
-   Strength: 0.78 | Slope: -60.1
-   5d: -4.7% | 20d: -12.6%
-```
-
-| Field | Meaning |
-|-------|---------|
-| **Confidence** | 70+ = HIGH (take it), 50-69 = MEDIUM (caution), <50 = LOW (skip) |
-| **Strength** | MCMC signal strength (0.72+ required) |
-| **Slope** | Trend steepness in degrees (20+ required) |
-| **Vol** | Stock's volatility (20-85% range required) |
-| **5d/20d** | Recent momentum confirmation |
-
----
-
-## System Architecture
+## Architecture
 
 ```
-scripts/
-  options_now.py         # Main signal generator (use this)
-  options_signal_v4.py   # Conservative signal generator
-  backtest_options_v4.py # Options backtester
-  get_signals.py         # Stock signals
-
+backtesting/
+  market_data.py        # GitHub-mirror + yfinance loader, VIX, split handling
+  options_pricing.py    # Black-Scholes, VIX-based IV model, skew, cost model
+  options_backtest.py   # Portfolio options backtester (daily MTM) + Monte Carlo
+  engine.py, metrics.py # Stock backtesting engine
 trading/
-  indicator.py           # MCMCIndicator - core signal engine
-
+  options_swing.py      # Strategy rules, confidence score, trade tickets
+  features.py           # Indicators incl. weekly/monthly (no-lookahead) features
+  swing_signals.py      # Catalog of 34 trader setups used by the strategy lab
+  regime_mcmc.py        # Regime-switching Markov-chain Monte Carlo (research)
+  indicator.py          # Original GBM MCMCIndicator
 config/
-  tickers.yaml           # Watchlist (50+ stocks)
-  best_params.json       # Optimized parameters
+  default.yaml          # incl. the options_swing section
+docs/
+  OPTIONS_SWING_STRATEGY.md
 ```
-
----
-
-## How It Works (Technical)
-
-### Signal Generation
-
-1. **Monte Carlo Simulation** - 25,000 price paths using historical volatility
-2. **Slope Calculation** - Forecast median vs current price, normalized
-3. **Regime Detection** - SPY determines bull/bear/neutral market
-4. **Multi-Filter** - Strength >= 0.72, Slope >= 20°, momentum confirmation
-
-### Regime Filter
-
-| SPY Condition | Regime | Allowed Trades |
-|---------------|--------|----------------|
-| Above 50 & 200 MA + positive momentum | BULL | CALLs only |
-| Below 50 & 200 MA + negative momentum | BEAR | PUTs only |
-| Mixed signals | NEUTRAL | Lower confidence |
-
-### Why It Works
-
-- **Momentum continuation** - We bet trends continue, not reverse
-- **Multiple filters** - Only ~1-2 trades per week qualify
-- **Asymmetric payoff** - +80% wins vs -35% losses = profitable at 45% win rate
-- **Regime alignment** - Trade with the market, not against it
-
----
-
-## Backtest Results by Period
-
-| Period | Trades | Win Rate | Profit Factor | Return |
-|--------|--------|----------|---------------|--------|
-| 2022 Bear | 7 | 29% | 1.34 | +5% |
-| 2023 Bull | 7 | 29% | 1.70 | +12% |
-| 2024 Full | 12 | 67% | 6.84 | +119% |
-| 2025 YTD | 14 | 86% | 23.65 | +336% |
-
----
-
-## Risk Warning
-
-- Past backtest results do not guarantee future performance
-- Options can expire worthless (100% loss on position)
-- Only trade money you can afford to lose
-- Consider paper trading first to learn the system
-
----
 
 ## Configuration
 
-### Key Parameters (config/best_params.json)
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `n_simulations` | 25,000 | Monte Carlo paths |
-| `slope_threshold` | 15.0 | Degrees for signal |
-| `signal_strength_min` | 0.72 | Minimum to trade |
-| `position_size_pct` | 0.10 | 10% per trade |
-
-### Ticker Universe (config/tickers.yaml)
-
-50+ liquid stocks including:
-- Mega caps: AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA
-- Tech: AMD, NFLX, CRM, ADBE, AVGO
-- Finance: JPM, BAC, GS, V, MA
-- Consumer: HD, COST, NKE, DIS
-- And more...
-
----
+Strategy parameters live in the `options_swing` section of
+`config/default.yaml`: universe, entry thresholds, deltas/DTE, exits, sizing,
+and confidence tiers. The research docs explain how each value was chosen.
+Change them only if you re-run the in-sample/out-of-sample checks.
 
 ## GPU Acceleration
 
-Uses CuPy for CUDA-accelerated simulations when available:
+The original `MCMCIndicator` uses CuPy for CUDA-accelerated simulation when
+available and falls back to NumPy automatically.
 
-- **CPU:** ~1,000 simulations (NumPy)
-- **GPU:** ~50,000 simulations (CuPy/CUDA)
+## Risk Warning
 
-Falls back to NumPy automatically if no GPU detected.
-
----
+- Backtests use modeled option prices (from VIX), not historical option
+  chains, and daily closes only. Past results do not guarantee future
+  performance.
+- A debit spread can lose 100% of the premium paid. Expect roughly one
+  losing year in six (see the Monte Carlo table in the docs).
+- Paper trade first, and size so that a −15% to −20% drawdown is tolerable.
 
 ## License
 
