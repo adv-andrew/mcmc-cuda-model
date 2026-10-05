@@ -77,8 +77,9 @@ def main() -> None:
           f"the 5-day SMA once held >= {cfg.min_hold} days, and always by day {cfg.max_hold}.")
     print(f"Size: risk {cfg.risk_per_trade:.0%} of the account per position (the debit is the "
           f"max loss), at most {cfg.max_concurrent} open at once.")
-    print("Prices are model estimates - check the live bid/ask and pay no more than "
-          "~5% above the estimated debit.")
+    print("Prices are model estimates. SKIP the trade if you cannot fill within ~2% of the "
+          "estimated debit:\n  the bias checks showed that overpaying ~1.5 vol points "
+          "(~4-5% of the premium) erases most of the edge.")
 
 
 if __name__ == "__main__":

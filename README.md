@@ -1,7 +1,7 @@
 # MCMC Options Trading System
 
 Monte Carlo research and trading toolkit for options. The main strategy is
-the **Options Swing Strategy**: call debit spreads on SPY / QQQ / IWM, bought
+the **Options Swing Strategy**: in-the-money calls on SPY / QQQ / IWM, bought
 when an index ETF pulls back sharply inside a long-term uptrend, and held
 about 3-7 trading days until it recovers.
 
@@ -31,36 +31,49 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
 | **Universe** | SPY, QQQ, IWM |
 | **Setup** | Close > 200-day SMA **and** ≥ 1.5 ATR below the 5-day high |
 | **Trigger** (any) | RSI(2) < 10 · IBS < 0.25 with RSI(2) < 15 · close < lower Bollinger(20, 2) · pullback ≥ 2 ATR |
-| **Position** | Buy ~0.55Δ call / sell ~0.30Δ call, nearest Friday ≥ 21 days out |
-| **Exit** | First close above the 5-day SMA after ≥ 3 days held · or day 7 · or +60% of max profit |
-| **Size** | 5% of equity per spread (debit = max loss), max 2 open |
+| **Position** | Buy one ~0.70Δ (in-the-money) call, nearest Friday ≥ 30 days out |
+| **Exit** | First close above the 5-day SMA after ≥ 3 days held · or day 7 · or +60% |
+| **Size** | 5% of equity per position (premium = max loss), max 2 open |
+| **Fill rule** | Skip the trade if you can't fill within ~2% of the estimated debit |
 | **Confidence** | 40 base, +30 if 21-day/weekly/monthly trends are all up, +30 if 20-day realized vol < 15%. HIGH = 100 |
 
 ### Backtest (realistic pricing: VIX-based IV, skew, bid/ask, commissions)
 
-| Period | Trades | Win | Avg return on risk | Profit factor | CAGR | Max DD | Sharpe |
-|---|---|---|---|---|---|---|---|
-| 2011-2019 (rules chosen here) | 212 | 67% | +8.2% | 1.72 | +9.4% | −20.3% | 0.73 |
-| 2020-2026 (held out) | 144 | 64% | +7.9% | 1.66 | +8.2% | −15.6% | 0.71 |
-| HIGH confidence only, 2020-2026 | 44 | 82% | +23.1% | 6.34 | +7.7% | −7.2% | 1.31 |
+| Period | Trades | Win | Avg return on risk | CAGR | Max DD | Sharpe |
+|---|---|---|---|---|---|---|
+| 2011-2019 (rules chosen here) | 212 | 64% | +6.3% | +7.3% | −18.5% | 0.72 |
+| 2020-2026 (held out) | 144 | 60% | +4.5% | +4.5% | −13.2% | 0.52 |
+| **1991-2009 S&P 500 (never used in design)** | 164 | 62% | +5.8% | +2.5% | −8.3% | 0.49 |
+| *SPY buy & hold, 2011-2026* | | | | +14.1% | −33.7% | 0.86 |
 
-Average hold is 4 trading days, at about 23 trades a year. All 36 neighboring
-parameter settings are profitable in both periods. The edge **does not
-survive 3× normal bid/ask costs**, so always use limit orders near the mid.
+### Is it real? (bias audit: `scripts/research_bias_checks.py`)
+
+- **The timing edge is confirmed.** On untouched 1991-2009 data the same
+  entry/exit days returned +0.62% on the underlying with a 72% win rate
+  (t = 5.7), the same as 2011-2026 (t = 5.5). It beats random uptrend days
+  at p ≈ 0.001 in both eras, with no option model involved.
+- **The options profit is real but thin.** Paying ~1.5 vol points more than
+  the model at entry removes most of it, hence the 2% fill rule. The deflated
+  Sharpe ratio (correcting for ~550 configurations tried) gives only an
+  11-51% chance that the portfolio Sharpe reflects a real edge.
+- **The original 0.55/0.30 call debit spread was overstated.** Its edge
+  depended on the call-skew assumption and faded on 1991-2009. It's still
+  available via `structure_kind: call_debit_spread`.
+- **Expect a few percent a year**, with roughly one losing year in five.
+  Paper trade first and compare your real fills to the scanner's estimates.
 
 ### What the research found
 
 - **The original MCMC slope signal predicts the opposite direction** at
   3-5 days: rank IC −0.05 to −0.12, and SELL signals were followed by
-  up-moves 53-62% of the time. That's because its GBM median just
-  extrapolates recent drift.
+  up-moves 53-62% of the time. Its GBM median just extrapolates recent drift.
 - Of 34 trader setups tested, **dips inside uptrends** reliably beat the
-  baseline, both in-sample and out-of-sample. Breakouts and trend stacks ≈
-  baseline. **Every bearish setup lost money.**
+  baseline. Breakouts and trend stacks ≈ baseline. **Every bearish setup
+  lost money.**
 - **Put credit spreads win 70-87% of the time but lose money** on 3-5 day
-  holds after costs and skew. **Call debit spreads** capture the bounce best.
-- Single-stock options (AAPL, NVDA) under the same rules lose to their
-  wider spreads. Trade the index ETFs.
+  holds after costs and skew.
+- Single-stock options (AAPL, NVDA) under the same rules lose to their wider
+  spreads. Trade the index ETFs.
 
 ---
 
@@ -68,12 +81,13 @@ survive 3× normal bid/ask costs**, so always use limit orders near the mid.
 
 | Command | Description |
 |---|---|
-| `python scripts/options_swing_signals.py` | **Today's signals** with spread tickets and exit status |
+| `python scripts/options_swing_signals.py` | **Today's signals** with order tickets and exit status |
 | `python scripts/backtest_options_swing.py` | Backtest, per-year/tier tables, stress tests, Monte Carlo sizing |
 | `python scripts/research_strategy_lab.py` | Event study: 34 setups × 1/2/3/5/10-day holds, IS vs OOS |
 | `python scripts/research_options_structures.py [--stocks]` | Long calls vs debit spreads vs credit spreads |
 | `python scripts/research_filters.py` | All 16 combinations of the confirmation filters |
 | `python scripts/research_mcmc_audit.py` | Walk-forward skill of the MCMC models |
+| `python scripts/research_bias_checks.py` | Untouched 1991-2009 test, placebo, no-options, pricing stress, deflated Sharpe |
 | `python scripts/get_signals.py` / `run_backtest.py` | Legacy stock signals / stock backtest |
 
 `options_now.py`, `options_signal_v4.py` and `backtest_options_v4.py` are
@@ -117,8 +131,8 @@ available and falls back to NumPy automatically.
 - Backtests use modeled option prices (from VIX), not historical option
   chains, and daily closes only. Past results do not guarantee future
   performance.
-- A debit spread can lose 100% of the premium paid. Expect roughly one
-  losing year in six (see the Monte Carlo table in the docs).
+- An option can lose 100% of the premium paid. Expect roughly one losing
+  year in five (see the Monte Carlo table in the docs).
 - Paper trade first, and size so that a −15% to −20% drawdown is tolerable.
 
 ## License

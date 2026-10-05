@@ -2,13 +2,23 @@
 
 **Goal:** a high-confidence options strategy with a normal hold of about 3+ days.
 
-**Result:** buy **call debit spreads on SPY / QQQ / IWM when an index ETF
-pulls back sharply inside a long-term uptrend**, and hold until it recovers
-(min 3, max 7 trading days). Over 2011-2026 this produced 356 trades, a 65%
-win rate, +8.1% average return on capital at risk, and a profit factor of 1.69.
-Results were nearly identical on the data the rules were chosen on (2011-2019)
-and on the data held out for validation (2020-2026). The HIGH-confidence tier
-won 68% (in-sample) and 86% (out-of-sample) of the time.
+**Result:** buy a **~0.70-delta in-the-money call on SPY / QQQ / IWM when an
+index ETF pulls back sharply inside a long-term uptrend**, and hold until it
+recovers (min 3, max 7 trading days).
+
+**Bottom line after the bias audit (section 5):**
+- **The timing edge is real.** On untouched 1991-2009 S&P 500 data, the
+  same entry/exit days returned +0.62% on the underlying with a 72% win rate
+  (t = 5.7), matching 2011-2026 (+0.57%, 72%, t = 5.5). It beats random
+  uptrend days at p ≈ 0.001 in both eras.
+- **The options profit is real under base assumptions but thin.** It was
+  +5.6% per trade on 1991-2009 (t = 2.6) and +5.0% on 2011-2026 (t = 3.5).
+  But overpaying about 1.5 vol points at entry would erase most of it, and
+  the deflated Sharpe ratio puts the probability that the portfolio Sharpe
+  isn't selection noise at only 11-51%.
+- **Expect a few percent a year, not a money machine.** That's 2.5% CAGR on
+  1991-2009 and 6.1% on 2011-2026 at 5% risk per trade, versus 14% for
+  buying and holding SPY over 2011-2026. Paper trade before risking money.
 
 Everything below can be reproduced with the `scripts/research_*.py` and
 `scripts/backtest_options_swing.py` scripts.
@@ -97,6 +107,7 @@ median Sharpe across 4 entries × 4 exit rules.
 | Call debit spread, 21 DTE | 56% / 64% | **0.25 / 0.90** |
 | Call debit spread, 14 DTE | 54% / 62% | 0.18 / 0.90 |
 | Long ATM call, 30 DTE | 50% / 56% | 0.36 / 0.69 |
+| *(added in the bias audit)* ITM call 0.70Δ, 30 DTE | see section 5 | 0.72 / 0.52 (strategy rules) |
 | Put credit spread, 30Δ, 14 DTE | **70% / 80%** | −0.26 / 0.33 |
 | Put credit spread, 40Δ, 10 DTE | **74% / 80%** | −0.14 / 0.31 |
 | Put credit spread, 20Δ, 21 DTE | 56% / 76% | −0.54 / 0.26 |
@@ -141,16 +152,19 @@ days beat 1-2 days for every max-hold tested.
    - close < lower Bollinger(20, 2), or
    - pullback ≥ 2 ATR.
 
-**Position:** buy a ~0.55Δ call and sell a ~0.30Δ call, with the nearest
-Friday expiry at least 21 days out. The debit is the maximum loss.
+**Position:** buy one **~0.70Δ (in-the-money) call**, with the nearest
+Friday expiry at least 30 days out. The premium is the maximum loss.
+(`structure_kind: call_debit_spread` switches back to the original
+0.55Δ/0.30Δ, 21-DTE debit spread. That version had better 2011-2026 numbers
+but failed the bias audit's skew test.)
 
 **Exit (first that applies, checked at the close):**
-1. Spread worth +60% of its max profit (rarely hit; mainly a safety valve).
+1. Option up +60% (rarely hit; mainly a safety valve).
 2. **Close above the 5-day SMA, once held ≥ 3 trading days** (the normal
-   exit, ~92% of trades).
+   exit, ~90% of trades).
 3. 7 trading days held.
 
-**Sizing:** 5% of equity per spread (the debit), at most 2 open at once.
+**Sizing:** 5% of equity per position (the premium), at most 2 open at once.
 
 **Confidence score** (0-100), from `trading/options_swing.py`:
 
@@ -168,77 +182,155 @@ as descriptive rather than as independent out-of-sample evidence.
 
 ---
 
-## 4. Results
+## 4. Results (default ITM call)
 
 From `python scripts/backtest_options_swing.py` (5% risk, max 2 concurrent):
 
 | | Trades | Win | Avg return on risk | PF | CAGR | Max DD | Sharpe |
 |---|---|---|---|---|---|---|---|
-| 2011-2019 (in-sample) | 212 | 67% | +8.2% | 1.72 | +9.4% | −20.3% | 0.73 |
-| 2020-2026 (out-of-sample) | 144 | 64% | +7.9% | 1.66 | +8.2% | −15.6% | 0.71 |
-| HIGH tier only, 2011-2019 | 91 | 68% | +12.4% | 2.32 | +6.2% | −12.4% | 0.77 |
-| HIGH tier only, 2020-2026 | 44 | **82%** | **+23.1%** | 6.34 | +7.7% | −7.2% | **1.31** |
+| 2011-2019 (in-sample) | 212 | 64% | +6.3% | 1.74 | +7.3% | −18.5% | 0.72 |
+| 2020-2026 (out-of-sample) | 144 | 60% | +4.5% | 1.47 | +4.5% | −13.2% | 0.52 |
+| HIGH tier only, 2011-2019 | 91 | 66% | +10.1% | 2.42 | +5.0% | −12.0% | 0.79 |
+| HIGH tier only, 2020-2026 | 44 | 77% | +14.1% | 4.85 | +4.6% | −5.9% | 1.13 |
+| **1991-2009 untouched (S&P 500)** | 164 | 62% | +5.8% | – | **+2.5%** | −8.3% | **0.49** |
 | *SPY buy & hold, 2011-2026* | – | – | – | – | +14.1% | −33.7% | 0.86 |
+| *original debit spread, 2011-2026* | 356 | 65% | +8.1% | 1.69 | +8.8% | −20.3% | 0.72 |
 
-- Average hold is 4.1 trading days (median 3). There are about 23 trades a year.
-- The 95% bootstrap CI on mean return per trade is **+4.1% to +11.9%**,
-  clearly above zero.
-- Correlation with SPY's daily returns is 0.39. The strategy is out of the
-  market most of the time, so it pairs well with a core index holding.
-- All 36 neighboring settings are profitable in both periods: pullback
-  1.25-2.0 ATR × 14/21/30 DTE × 5/7/10-day max hold.
-- Losing years (equity): 2011, 2016, 2018 (Volmageddon / Q4 selloff), 2020
-  (COVID), and 2022 (only 4 trades; SPY spent most of the year below its
-  200-day SMA). The worst was −12.8% (2018); the best were about +30% (2013,
-  2015, 2017).
+- Average hold is 4.0 trading days (median 3). There are about 23 trades a
+  year on three ETFs, and about 9 a year on one index (1991-2009).
+- The 95% bootstrap CI on mean return per trade is +2.4% to +8.7%.
+- Correlation with SPY's daily returns is 0.38.
+- All 36 neighboring settings are profitable in both periods.
+- Losing years: 2011, 2016, 2018 (−11.8%), 2020 and 2022 in 2011-2026;
+  1996, 2000 and 2004 in 1991-2009.
 
-### Stress tests
+### Stress tests (portfolio, 2011-2019 / 2020-2026 Sharpe)
 
-| Scenario | Sharpe IS / OOS | Verdict |
+| Scenario | ITM call (default) | Debit spread (original) |
 |---|---|---|
-| Base | 0.73 / 0.71 | |
-| IV 11% richer (VIX × 1.0) | 0.70 / 0.64 | robust |
-| Enter one day late | 0.47 / 0.50 | still profitable |
-| 2× bid/ask costs | 0.30 / 0.31 | thin |
-| **3× bid/ask costs** | **−0.15 / −0.10** | **edge gone: execution matters** |
-| 1 position max | 0.70 / 0.58 | lower return, maxDD ≈ −10% |
-| 10% risk per trade | 0.74 / 0.71 | CAGR +18% / +16%, maxDD −39% / −29% |
+| Base | 0.72 / 0.52 | 0.73 / 0.71 |
+| Steeper put skew, flatter call skew | 0.69 / 0.50 | 1.05 / 1.03 |
+| IV 11% richer (entry *and* exit) | 0.53 / 0.34 | 0.70 / 0.64 |
+| Enter one day late | 0.51 / 0.38 | 0.47 / 0.50 |
+| 2× bid/ask | 0.49 / 0.29 | 0.30 / 0.31 |
+| 3× bid/ask | 0.26 / 0.04 | −0.15 / −0.10 |
+| Weekly trend required | 0.61 / 0.97 | 0.57 / 1.15 |
 
 ### Monte Carlo sizing (10,000 one-year resamples of the trade list)
 
 | Risk per trade | Median year | Bad year (5th pct) | P(losing year) | Bad-case max DD |
 |---|---|---|---|---|
-| 2% | +3.8% | −2.5% | 16% | −5.3% |
-| 3% | +5.8% | −3.8% | 16% | −7.9% |
-| **5%** | **+9.6%** | **−6.4%** | **17%** | **−12.9%** |
-| 10% | +19.2% | −13.4% | 18% | −24.6% |
+| 2% | +2.6% | −2.3% | 19% | −4.3% |
+| 3% | +3.9% | −3.4% | 19% | −6.3% |
+| **5%** | **+6.6%** | **−5.7%** | **19%** | **−10.4%** |
+| 10% | +13.0% | −11.8% | 20% | −20.1% |
 
 ---
 
-## 5. How to trade it
+## 5. Bias audit
+
+`python scripts/research_bias_checks.py` attacks the result from five
+directions. The rules were frozen before running it.
+
+### 5a. Untouched history and placebo tests
+
+Per-trade results for the strategy's actual entries:
+
+| | 2011-2026 (design) | **1991-2009 (never used)** |
+|---|---|---|
+| Underlying only, no options | 72% win, +0.57%, **t = 5.5** | 72% win, +0.62%, **t = 5.7** |
+| ITM call | 61% win, +5.0%, t = 3.5 | 61% win, +5.6%, t = 2.6 |
+| Random days *above* SMA200, ITM call | −0.2% | −0.5% |
+| Placebo p-value (signal vs 5,000 random samples), ITM call / underlying | p < 0.0002 / 0.0002 | p = 0.005 / 0.001 |
+
+The dip-timing effect replicates almost exactly on 19 years of data that
+played no part in designing the rules, including the 2000-02 and 2008 bear
+markets. It is not a product of the 2010s bull market or of the option
+model: the underlying alone shows it.
+
+By phase, the ITM call made +5.8% per trade in 1991-99, +6.9% in 2003-07 and
++11.0% in 2008-09, and lost −7.6% in 2000-02 (only 9 trades). In 2011-26 it
+was strong in 2011-15 and 2023-26 and roughly flat in 2016-19 (+0.8%) and
+2020-22 (+2.3%).
+
+### 5b. Option-pricing sensitivity (per trade, avg / t-stat)
+
+| Scenario | Debit spread 2011-26 | Debit spread 1991-09 | ITM call 2011-26 | ITM call 1991-09 |
+|---|---|---|---|---|
+| Base | +7.6% / 4.2 | +4.9% / 1.8 | +5.0% / 3.5 | +5.6% / 2.6 |
+| Call skew 0.15 | +5.7% / 3.2 | +3.4% / 1.3 | +4.9% / 3.4 | +5.6% / 2.6 |
+| Call skew 0.25 (steep) | +2.0% / 1.2 | +0.4% / 0.2 | +4.8% / 3.4 | +5.5% / 2.5 |
+| Pay +10% IV at entry only | +5.9% / 3.2 | +3.0% / 1.1 | **+0.4% / 0.3** | **+1.2% / 0.6** |
+| 1.5× bid/ask | +5.1% / 2.9 | +1.7% / 0.6 | +3.9% / 2.8 | +4.5% / 2.1 |
+| Enter and exit 1 day late | +7.9% / 3.9 | +5.7% / 1.7 | +5.5% / 3.4 | +8.0% / 2.9 |
+| All of the above at once | −1.7% | −4.4% | −0.1% | +1.6% |
+
+Each structure has its own weak point. **The debit spread depends on the
+call-wing skew**, the least certain part of the model, because its short
+0.30Δ call is priced there. That's why it was dropped as the default. **The
+ITM call depends on entry IV.** Paying ~1.5 vol points more than the model
+at entry (about 4-5% of the premium) removes most of the edge. The practical
+defense is the scanner's fill rule: **skip the trade if you can't fill within
+~2% of the estimated debit.**
+
+The ITM call (0.70Δ) was chosen *after* seeing the 1991-2009 debit-spread
+result, so its 1991-2009 numbers are not fully independent. The reason for
+choosing it was set beforehand: no short leg means no call-skew exposure.
+
+### 5c. Multiple testing
+
+About 550 configurations were evaluated during research. The deflated Sharpe
+ratio (Bailey & López de Prado) asks whether the best result beats what
+that much searching would produce by luck:
+
+| Assumed independent trials | 30 | 100 | 552 |
+|---|---|---|---|
+| P(portfolio Sharpe 0.64 reflects a real edge) | 51% | 29% | 11% |
+
+The configurations are heavily correlated, so the truth lies toward the
+low-trial end. Even so, **the options portfolio's Sharpe ratio on its own is
+not strong evidence.** The stronger evidence is the frozen-rule replication
+on 1991-2009 and the placebo tests, which multiple testing doesn't explain.
+
+### 5d. Verdict
+
+| Claim | Status |
+|---|---|
+| Short dips in uptrending index ETFs tend to bounce within 3-7 days | **Confirmed** (two eras, placebo p ≈ 0.001, no option model needed) |
+| The default ITM-call version makes money after realistic costs | **Likely, but thin.** Positive in both eras under base pricing; ~breakeven if entry IV is ~10% richer than modeled |
+| "+8-9% a year" from the original debit spread | **Overstated.** Depends on the 2010s and on the skew assumption |
+| The HIGH-confidence tier is much better | **Unproven.** 44 out-of-sample trades, and the components were chosen with both periods visible |
+
+---
+
+## 6. How to trade it
 
 ```bash
-python scripts/options_swing_signals.py        # today's signals + spread tickets
+python scripts/options_swing_signals.py        # today's signals + order tickets
 python scripts/backtest_options_swing.py       # full backtest and stress tests
+python scripts/research_bias_checks.py         # untouched-data, placebo and pricing audits
 ```
 
 1. Run the scanner about 15 minutes before the close. If a symbol shows
-   **ENTRY**, the ticket lists the strikes, expiry, estimated debit, and
+   **ENTRY**, the ticket lists the strike, expiry, estimated debit, and
    take-profit value.
-2. **Use a limit order near the mid price.** The stress test shows execution
-   cost is the biggest threat to this edge. Don't pay more than ~5% above the
-   estimated debit.
+2. **Use a limit order, and skip the trade if you can't fill within ~2% of
+   the estimated debit.** Overpaying for implied vol is the main way this
+   edge disappears (section 5b).
 3. Each day near the close, check `if already holding: exit signal`. Exit at
    the first YES once you've held 3+ days, and always exit by day 7.
 4. Favor HIGH-confidence tickets. When two ETFs signal on the same day, take
    the higher score; they are highly correlated.
 
-## 6. Limitations
+## 7. Limitations
 
 - **Close-only data.** Intraday paths, stops, and gaps aren't modeled, and the
   1-day-late test is the proxy for execution slippage.
 - **Modeled option prices.** IV comes from VIX, not historical option chains,
-  and the VIX mirror can lag a few days. Live trading should use real quotes.
+  and the VIX mirror can lag a few days. The bias audit shows the result
+  depends on entry IV being close to the model's estimate, which only real
+  quotes can settle. Paper trading and recording your actual fills against
+  the scanner's estimated debit is the most valuable next test.
 - **Modest sample.** 356 trades, and only 44 HIGH-tier trades out-of-sample.
   The edge is statistically positive, but the size of the HIGH-tier edge is
   uncertain.

@@ -1,5 +1,5 @@
 """
-Options Swing Strategy: buy the dip in an uptrend with call debit spreads.
+Options Swing Strategy: buy the dip in an uptrend with in-the-money calls.
 
 Research summary (see docs/OPTIONS_SWING_STRATEGY.md and scripts/research_*):
 
@@ -29,7 +29,7 @@ Position:
     Buy a ~0.70-delta call, nearest Friday expiry >= 30 calendar days out
     (optionally a 0.55/0.30 call debit spread via ``structure_kind``).
 Exit (checked at each close):
-    +60% of max profit  |  close > SMA(5) after >= 3 trading days held  |
+    +60% gain (spreads: of max profit)  |  close > SMA(5) after >= 3 trading days held  |
     7 trading days held  |  expiry
 """
 
