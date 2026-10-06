@@ -210,6 +210,7 @@ class _Open:
     atm_iv: float
     entry_spot: float
     signal: str
+    last_mark: float = float("nan")  # last liquidation value (for days without a quote)
 
 
 class OptionsSwingBacktester:
@@ -356,11 +357,12 @@ class OptionsSwingBacktester:
             for op in open_pos:
                 spot = close[op.symbol].iloc[i]
                 if np.isnan(spot):
-                    mtm += op.risk_dollars
+                    mtm += op.risk_dollars if np.isnan(op.last_mark) else op.last_mark
                     continue
                 v = close_value(op.pos, spot, date, iv[op.symbol].iloc[i], self.skew,
                                 self._costs(op.symbol, scale[op.symbol][i]))
-                mtm += op.risk_dollars * (1.0 + position_return(op.pos, v))
+                op.last_mark = op.risk_dollars * (1.0 + position_return(op.pos, v))
+                mtm += op.last_mark
             equity_now = cash + mtm
             equity[i] = equity_now
 

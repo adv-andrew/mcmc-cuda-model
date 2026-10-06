@@ -111,3 +111,27 @@ def test_contracts_for():
     assert contracts_for(46.0, 100_000, cfg) == 1      # $4,600 fits under $6,000
     assert contracts_for(46.0, 60_000, cfg) == 1       # $4,600 <= 1.5 x $3,600
     assert contracts_for(46.0, 25_000, cfg) == 0       # $4,600 > 1.5 x $1,500 -> skip
+
+
+def test_ledger_keeps_its_config_and_warns(market, tmp_path):
+    from dataclasses import replace
+
+    path = tmp_path / "c.json"
+    PaperLedger(path, SwingConfig(), whole_contracts=False).update(market, start="2022-01-03")
+    changed = replace(SwingConfig(), risk_per_trade=0.10)
+    kept = PaperLedger(path, changed)
+    assert kept.cfg.risk_per_trade == SwingConfig().risk_per_trade
+    assert kept.config_warning and "NOTE:" in kept.report()
+    adopted = PaperLedger(path, changed, adopt_config=True)
+    assert adopted.cfg.risk_per_trade == 0.10 and adopted.config_warning is None
+
+
+def test_old_ledger_without_sizing_flag_stays_fractional(market, tmp_path):
+    import json
+
+    path = tmp_path / "old.json"
+    PaperLedger(path, SwingConfig(), whole_contracts=False).update(market, start="2022-01-03")
+    raw = json.loads(path.read_text())
+    raw["meta"].pop("whole_contracts")
+    path.write_text(json.dumps(raw))
+    assert PaperLedger(path, SwingConfig()).engine.whole_contracts is False

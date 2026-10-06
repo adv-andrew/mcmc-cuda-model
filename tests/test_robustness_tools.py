@@ -133,7 +133,9 @@ def test_load_long_history_splices_recent_mirror(tmp_path):
         df = md.load_long_history("SPY", cache_dir=tmp_path)
     assert df.index.is_monotonic_increasing and not df.index.duplicated().any()
     assert len(df) == 6  # 5 release days + 1 newer mirror day
-    assert df.Close.iloc[-1] == 201.0
+    # newer source rescaled at the overlap (1999-01-08: 104 vs 200) -> continuous returns
+    assert df.Close.iloc[-1] == pytest.approx(201.0 * 104.0 / 200.0)
+    assert df.Close.pct_change().iloc[-1] == pytest.approx(201.0 / 200.0 - 1)
 
 
 def test_etf_split_table():
@@ -289,8 +291,105 @@ def test_stale_mirror_gets_yfinance_top_up(tmp_path):
                          index=[pd.Timestamp.now().normalize() - pd.Timedelta(days=20)])
     fresh = pd.DataFrame({c: [100.0, 105.0] for c in md.COLUMNS},
                          index=[stale.index[0], pd.Timestamp.now().normalize()])
-    with patch.object(md, "_http_get", return_value=b""), \
+    with patch.object(md, "_http_get", return_value=b"DATE,OPEN,HIGH,LOW,CLOSE\n"), \
          patch.object(md, "_normalise_vix", return_value=stale), \
          patch.object(md, "_fetch_yfinance", return_value=fresh):
-        df = md.load_daily("VIX", cache_dir=tmp_path, refresh=True)
+        df = md.load_daily("VIX", cache_dir=tmp_path, refresh=True, allow_partial=True)
     assert len(df) == 2 and df.Close.iloc[-1] == 105.0
+
+
+# ----------------------------------------------------------------------
+# code-review fixes: data splicing, unfinished bars, staleness
+# ----------------------------------------------------------------------
+
+def test_top_up_drops_nan_rows_and_rescales_adjclose_separately():
+    base = pd.DataFrame({"Open": [100.0], "High": [100.0], "Low": [100.0], "Close": [100.0],
+                         "AdjClose": [98.0], "Volume": [1.0]},
+                        index=pd.to_datetime(["2026-09-22"]))
+    newer = pd.DataFrame({"Open": [200.0, 210.0, np.nan], "High": [200.0, 210.0, np.nan],
+                          "Low": [200.0, 210.0, np.nan], "Close": [200.0, 210.0, np.nan],
+                          "AdjClose": [200.0, 210.0, np.nan], "Volume": [1.0, 1.0, 1.0]},
+                         index=pd.to_datetime(["2026-09-22", "2026-09-23", "2026-09-24"]))
+    out = md.top_up(base, newer)
+    assert len(out) == 2 and not out.Close.isna().any()
+    assert out.Close.iloc[-1] == pytest.approx(105.0)      # 210 * 100/200
+    assert out.AdjClose.iloc[-1] == pytest.approx(102.9)   # 210 * 98/200
+    # AdjClose return across the splice equals the source's own return
+    assert out.AdjClose.pct_change().iloc[-1] == pytest.approx(210 / 200 - 1)
+
+
+def test_drop_unfinished_and_business_days():
+    idx = pd.to_datetime(["2026-10-05", "2026-10-06"])
+    df = pd.DataFrame({c: [1.0, 2.0] for c in md.COLUMNS}, index=idx)
+    before = pd.Timestamp("2026-10-06 15:45", tz=md.MARKET_TZ)
+    after = pd.Timestamp("2026-10-06 16:30", tz=md.MARKET_TZ)
+    assert len(md.drop_unfinished(df, now=before)) == 1
+    assert len(md.drop_unfinished(df, now=after)) == 2
+    assert md.business_days_old(pd.Timestamp("2026-10-02"), now=before) == 2  # Fri -> Tue
+    assert md.business_days_old(pd.Timestamp("2026-10-06"), now=before) == 0
+
+
+def test_unfinished_bar_never_cached(tmp_path):
+    today = pd.Timestamp.now(tz=md.MARKET_TZ).tz_localize(None).normalize()
+    df = pd.DataFrame({c: [1.0, 2.0] for c in md.COLUMNS},
+                      index=[today - pd.Timedelta(days=1), today])
+    chop = lambda d, now=None: d.iloc[:-1]  # noqa: E731  (pretend the session is open)
+    empty = pd.DataFrame(columns=md.COLUMNS)
+    with patch.object(md, "_http_get", return_value=b"DATE,OPEN,HIGH,LOW,CLOSE\n"), \
+         patch.object(md, "_normalise_vix", return_value=df), \
+         patch.object(md, "_fetch_yfinance", return_value=empty), \
+         patch.object(md, "drop_unfinished", side_effect=chop):
+        live = md.load_daily("VIX", cache_dir=tmp_path, refresh=True, allow_partial=True)
+        final = md.load_daily("VIX", cache_dir=tmp_path, refresh=True)
+    assert len(live) == 2 and len(final) == 1
+    cached = pd.read_csv(tmp_path / "VIX.csv", index_col=0, parse_dates=True)
+    assert len(cached) == 1
+
+
+# ----------------------------------------------------------------------
+# code-review fixes: engine parity and robustness
+# ----------------------------------------------------------------------
+
+def _engine_inputs(n=60, drift=-0.01):
+    idx = pd.bdate_range("2024-01-02", periods=n)
+    close = pd.Series(100 * np.exp(drift * np.arange(n)), index=idx)
+    return idx, close
+
+
+def test_engine_honours_stop_loss_like_backtester():
+    from backtesting.core_overlay_engine import CoreOverlayEngine, EngineState
+
+    idx, close = _engine_inputs()
+    exits = ExitRules(min_hold=3, max_hold=10, profit_target=None, stop_loss=-0.3,
+                      signal_exit=False)
+    eng = CoreOverlayEngine(SPEC, exits, core_weight=0.0)
+    st = EngineState(cash=100_000)
+    for i, d in enumerate(idx):
+        eng.step(st, d, 100.0, False, {"SPY": close.iloc[i]}, {"SPY": 0.16},
+                 {"SPY": i == 0}, {"SPY": False})
+    assert st.trades and st.trades[0]["exit_reason"] == "stop"
+    assert -0.6 < st.trades[0]["ret_on_risk"] <= -0.3
+
+
+def test_engine_rejects_invalid_core_price():
+    from backtesting.core_overlay_engine import CoreOverlayEngine, EngineState
+
+    eng = CoreOverlayEngine(SPEC, EXITS)
+    with pytest.raises(ValueError):
+        eng.step(EngineState(cash=1.0), pd.Timestamp("2024-01-02"), float("nan"), True,
+                 {}, {}, {}, {})
+
+
+def test_engine_keeps_last_mark_when_quote_missing():
+    from backtesting.core_overlay_engine import CoreOverlayEngine, EngineState
+
+    idx = pd.bdate_range("2024-01-02", periods=4)
+    eng = CoreOverlayEngine(SPEC, ExitRules(min_hold=3, max_hold=10, profit_target=None,
+                                            signal_exit=False), core_weight=0.0)
+    st = EngineState(cash=100_000)
+    px = [100.0, 104.0, float("nan"), 104.0]
+    for i, d in enumerate(idx):
+        eng.step(st, d, 100.0, False, {"SPY": px[i]}, {"SPY": 0.16}, {"SPY": i == 0},
+                 {"SPY": False})
+    eq = [v for _, v in st.equity]
+    assert eq[2] == pytest.approx(eq[1], rel=1e-3)  # no jump back to cost on the gap day

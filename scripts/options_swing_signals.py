@@ -15,6 +15,7 @@ sys.path.insert(0, ".")
 import argparse
 import json
 
+import numpy as np
 import pandas as pd
 
 from backtesting.market_data import load_universe
@@ -34,7 +35,8 @@ def main() -> None:
 
     cfg = SwingConfig.from_yaml()
     syms = list(cfg.symbols)
-    data = load_universe(syms + ["SPY", "VIX"], refresh=True)
+    # allow_partial: run ~15 min before the close and use the live bar
+    data = load_universe(syms + ["SPY", "VIX"], refresh=True, allow_partial=True)
     last_px = max(data[s].index[-1] for s in syms)
     if args.vix is not None:  # manual override for today's VIX
         vix = data["VIX"]
@@ -64,7 +66,7 @@ def main() -> None:
     print("=" * 72)
     print(f"Data through {last.date()}  |  VIX data through {vix_last.date()}"
           + ("  (stale: IV estimated from realized vol; pass --vix <today's VIX>)"
-             if (last - vix_last).days > 3 else ""))
+             if np.busday_count(vix_last.date(), last.date()) > 1 else ""))
     age = (pd.Timestamp.now().normalize() - last).days
     if age > 4:
         print(f"WARNING: price data is {age} days old - signals may be out of date. "

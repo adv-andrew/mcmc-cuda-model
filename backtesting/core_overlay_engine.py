@@ -128,6 +128,8 @@ class CoreOverlayEngine:
     ) -> EngineState:
         """Advance ``state`` by one trading day (mutates and returns it)."""
         date = pd.Timestamp(date)
+        if core_px is None or math.isnan(core_px) or core_px <= 0:
+            raise ValueError(f"invalid core price {core_px!r} on {date.date()}")
         scales = scales or {}
         last = pd.Timestamp(state.last_date) if state.last_date else None
 
@@ -141,9 +143,9 @@ class CoreOverlayEngine:
             p["days_held"] += 1
             s = p["symbol"]
             px = closes.get(s, float("nan"))
-            if px is None or math.isnan(px):
+            if px is None or math.isnan(px):  # no quote today: keep the last mark
                 still.append(p)
-                opt_value += p["risk"]
+                opt_value += p.get("last_value", p["risk"])
                 continue
             pos = _pos_from_dict(p["pos"])
             v = close_value(pos, px, date, ivs[s], self.skew, self._costs(scales.get(s, 1.0)))
@@ -152,6 +154,8 @@ class CoreOverlayEngine:
             reason = None
             if (pos.expiry - date).days <= 0:
                 reason = "expiry"
+            elif self.exits.stop_loss is not None and r <= self.exits.stop_loss:
+                reason = "stop"
             elif (self.exits.profit_target is not None
                   and profit_fraction(pos, v) >= self.exits.profit_target):
                 reason = "target"

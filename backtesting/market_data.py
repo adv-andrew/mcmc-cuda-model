@@ -47,7 +47,10 @@ RELEASE_PARQUET_URL = (
     "https://github.com/Johnbrick123/sp500-data/releases/download/data/prices.parquet"
 )
 RELEASE_TTL_HOURS = 24
-STALE_AFTER_DAYS = 4  # calendar days; older mirror data gets a yfinance top-up
+STALE_AFTER_BUSINESS_DAYS = 1  # older mirror data gets a yfinance top-up
+MARKET_TZ = "America/New_York"
+SESSION_CLOSE = (16, 15)  # bars dated today count as final only after 16:15 ET
+_YF_UNREACHABLE = False  # set after a failed yfinance call; skip retries this process
 
 DEFAULT_CACHE_DIR = Path("data/cache/daily")
 CACHE_TTL_HOURS = 12
@@ -119,17 +122,48 @@ def _normalise_release(table: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return df[COLUMNS].astype(float).dropna(subset=["Close"])
 
 
-def _fetch_yfinance(symbol: str) -> pd.DataFrame:
+def _fetch_yfinance(symbol: str, start: str = "2005-01-01") -> pd.DataFrame:
+    """Daily bars from yfinance (empty frame if unavailable).
+
+    yfinance reports network failures by returning an empty frame, so an
+    empty result marks Yahoo unreachable for the rest of the process.
+    """
+    global _YF_UNREACHABLE
+    if _YF_UNREACHABLE:
+        return pd.DataFrame(columns=COLUMNS)
     import yfinance as yf  # imported lazily: optional in sandboxed envs
 
-    df = yf.download(symbol, start="2005-01-01", progress=False, auto_adjust=False)
+    try:
+        df = yf.download(symbol, start=start, progress=False, auto_adjust=False)
+    except Exception:
+        _YF_UNREACHABLE = True
+        raise
     if df is None or df.empty:
+        _YF_UNREACHABLE = True
         return pd.DataFrame(columns=COLUMNS)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.rename(columns={"Adj Close": "AdjClose"})
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    return df[COLUMNS].astype(float)
+    return df[COLUMNS].astype(float).dropna(subset=["Close"])
+
+
+def business_days_old(last: pd.Timestamp, now: Optional[pd.Timestamp] = None) -> int:
+    """Weekdays from ``last`` up to today (US/Eastern); 0 if dated today."""
+    now = now if now is not None else pd.Timestamp.now(tz=MARKET_TZ)
+    today = (now.tz_localize(None) if now.tzinfo else now).normalize()
+    return int(np.busday_count(pd.Timestamp(last).date(), today.date()))
+
+
+def drop_unfinished(df: pd.DataFrame, now: Optional[pd.Timestamp] = None) -> pd.DataFrame:
+    """Drop a bar dated today if the US session has not closed yet."""
+    if df is None or df.empty:
+        return df
+    now_et = now if now is not None else pd.Timestamp.now(tz=MARKET_TZ)
+    today = (now_et.tz_localize(None) if now_et.tzinfo else now_et).normalize()
+    if df.index[-1].normalize() == today and (now_et.hour, now_et.minute) < SESSION_CLOSE:
+        return df.iloc[:-1]
+    return df
 
 
 def load_daily(
@@ -137,14 +171,17 @@ def load_daily(
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     refresh: bool = False,
     ttl_hours: float = CACHE_TTL_HOURS,
+    allow_partial: bool = False,
 ) -> pd.DataFrame:
     """Load full daily OHLCV history for ``symbol`` (``"VIX"`` or ``"^VIX"`` for VIX).
 
     Order of preference: fresh local cache -> GitHub mirror -> yfinance ->
     stale local cache. If the mirror's last bar is more than
-    ``STALE_AFTER_DAYS`` old (the VIX mirror can lag ~2 weeks), newer bars
-    from yfinance are appended when it is reachable. Raises ``RuntimeError``
-    if nothing is available.
+    ``STALE_AFTER_BUSINESS_DAYS`` business days old (the VIX mirror can lag
+    ~2 weeks), newer bars from yfinance are appended when it is reachable.
+    A bar dated today is never cached before the session closes; it is
+    returned only with ``allow_partial=True`` (for intraday scans). Raises
+    ``RuntimeError`` if nothing is available.
     """
     symbol = symbol.upper().lstrip("^")
     cache_dir = Path(cache_dir)
@@ -170,10 +207,13 @@ def load_daily(
             df = _normalise_release(table, symbol)
 
     stale = (df is not None and not df.empty
-             and (pd.Timestamp.now().normalize() - df.index[-1]).days > STALE_AFTER_DAYS)
+             and business_days_old(df.index[-1]) > STALE_AFTER_BUSINESS_DAYS)
     if df is None or df.empty or stale:
+        yf_symbol = ("^" + symbol) if symbol == "VIX" else symbol
+        start = (str((df.index[-1] - pd.Timedelta(days=10)).date())
+                 if df is not None and not df.empty else "2005-01-01")
         try:
-            yf_df = _fetch_yfinance(("^" + symbol) if symbol == "VIX" else symbol)
+            yf_df = _fetch_yfinance(yf_symbol, start=start)
             if df is None or df.empty:
                 df = yf_df
             elif not yf_df.empty:
@@ -182,8 +222,8 @@ def load_daily(
             logger.warning("yfinance failed for %s: %s", symbol, exc)
 
     if df is not None and not df.empty:
-        df.to_csv(cache_path)
-        return df
+        drop_unfinished(df).to_csv(cache_path)
+        return df if allow_partial else drop_unfinished(df)
 
     if cache_path.exists():
         logger.warning("Using stale cache for %s", symbol)
@@ -233,17 +273,20 @@ def top_up(base: pd.DataFrame, newer: pd.DataFrame) -> pd.DataFrame:
     The appended prices are rescaled so the overlapping day matches, which
     keeps returns continuous even if the two sources adjust differently.
     """
+    newer = newer.dropna(subset=["Close"])
     extra = newer[newer.index > base.index[-1]]
     if extra.empty:
         return base
     overlap = newer.index.intersection(base.index)
     if len(overlap):
         d = overlap[-1]
-        ratio = base.loc[d, "Close"] / newer.loc[d, "Close"]
-        if np.isfinite(ratio) and ratio > 0:
-            extra = extra.copy()
-            for c in ("Open", "High", "Low", "Close", "AdjClose"):
-                extra[c] = extra[c] * ratio
+        extra = extra.copy()
+        # price columns follow Close; AdjClose has its own adjustment factor
+        for cols, ref in ((("Open", "High", "Low", "Close"), "Close"), (("AdjClose",), "AdjClose")):
+            ratio = base.loc[d, ref] / newer.loc[d, ref]
+            if np.isfinite(ratio) and ratio > 0:
+                for c in cols:
+                    extra[c] = extra[c] * ratio
     return pd.concat([base, extra[COLUMNS]]).sort_index()
 
 
@@ -262,19 +305,21 @@ def load_long_history(
     old = _normalise_release(table, symbol)
     if old.empty:
         return recent
-    return pd.concat([old, recent[recent.index > old.index[-1]]]).sort_index()
+    return top_up(old, recent)
 
 
 def load_universe(
     symbols: Iterable[str],
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     refresh: bool = False,
+    allow_partial: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Load several symbols, skipping (and logging) any that fail."""
     out: Dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            out[sym.upper()] = load_daily(sym, cache_dir=cache_dir, refresh=refresh)
+            out[sym.upper()] = load_daily(sym, cache_dir=cache_dir, refresh=refresh,
+                                          allow_partial=allow_partial)
         except RuntimeError as exc:
             logger.warning("%s", exc)
     return out

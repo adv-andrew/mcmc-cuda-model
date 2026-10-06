@@ -13,7 +13,7 @@ edge disappears if real fills run ~4-5% above the model.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from backtesting.core_overlay_engine import CoreOverlayEngine, EngineState
-from backtesting.market_data import split_factor
+from backtesting.market_data import drop_unfinished, split_factor
 from backtesting.options_pricing import atm_iv_series
 from backtesting.portfolio import faber_signal
 from trading.features import build_features
@@ -32,25 +32,52 @@ DEFAULT_LEDGER = Path("data/paper/ledger.json")
 
 class PaperLedger:
     def __init__(self, path: Path | str = DEFAULT_LEDGER, cfg: Optional[SwingConfig] = None,
-                 initial: float = 100_000.0, whole_contracts: bool = True) -> None:
+                 initial: float = 100_000.0, whole_contracts: bool = True,
+                 adopt_config: bool = False) -> None:
         """``whole_contracts`` (default) trades integer option contracts the
-        way a real account must; ``False`` reproduces the research sizing."""
+        way a real account must; ``False`` reproduces the research sizing.
+
+        An existing ledger keeps the strategy config it was created with, so
+        a forward test never silently mixes two strategies; pass
+        ``adopt_config=True`` to switch it to ``cfg`` deliberately.
+        """
         self.path = Path(path)
         self.cfg = cfg or SwingConfig.from_yaml()
+        self.config_warning: Optional[str] = None
         if self.path.exists():
             raw = json.loads(self.path.read_text())
             self.state = EngineState.from_dict(raw["state"])
             self.meta = raw["meta"]
+            self.meta.setdefault("whole_contracts", False)  # pre-whole-contract ledgers
+            saved = self._config_from_meta(self.meta.get("config", {}))
+            if saved != self.cfg:
+                if adopt_config:
+                    self.meta["config"] = self._config_to_meta(self.cfg)
+                    self.meta.setdefault("config_changes", []).append(self.state.last_date)
+                else:
+                    self.config_warning = ("config/default.yaml differs from the config this "
+                                           "ledger was created with; using the ledger's saved "
+                                           "config (pass adopt_config=True to switch)")
+                    self.cfg = saved
         else:
             self.state = EngineState(cash=float(initial))
             self.meta = {"initial": float(initial), "created": None,
                          "whole_contracts": bool(whole_contracts),
-                         "config": {k: (list(v) if isinstance(v, tuple) else v)
-                                    for k, v in asdict(self.cfg).items()}}
+                         "config": self._config_to_meta(self.cfg)}
         self.engine = CoreOverlayEngine(
             self.cfg.structure(), self.cfg.exits(), self.cfg.core_weight,
             self.cfg.risk_per_trade, self.cfg.max_concurrent,
             whole_contracts=self.meta.get("whole_contracts", whole_contracts))
+
+    @staticmethod
+    def _config_to_meta(cfg: SwingConfig) -> dict:
+        return {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(cfg).items()}
+
+    @staticmethod
+    def _config_from_meta(d: dict) -> SwingConfig:
+        names = {f.name for f in fields(SwingConfig)}
+        kw = {k: (tuple(v) if k == "symbols" else v) for k, v in d.items() if k in names}
+        return SwingConfig(**kw)
 
     # ------------------------------------------------------------------
     def save(self) -> None:
@@ -76,7 +103,7 @@ class PaperLedger:
         ext = {s: exit_signal(feats[s]) for s in syms}
         prio = {s: confidence_score(feats[s]) + feats[s].pullback_atr for s in syms}
         scale = {s: split_factor(data[s].index, s) for s in syms}
-        core_close = data[cfg.core_symbol]["Close"]
+        core_close = drop_unfinished(data[cfg.core_symbol])["Close"]  # finished days only
         core_in = faber_signal(core_close, cfg.faber_months).shift(1, fill_value=False)
         # align to the core's calendar exactly as the backtest wrapper does
         cal = core_close.index
@@ -150,7 +177,8 @@ class PaperLedger:
             return "Ledger is empty - run an update first."
         eq = pd.Series({pd.Timestamp(d): v for d, v in st.equity})
         initial = self.meta["initial"]
-        lines = [
+        lines = [f"NOTE: {self.config_warning}"] if self.config_warning else []
+        lines += [
             f"Paper ledger {self.path}  (since {self.meta.get('created')}, last update {st.last_date})",
             f"Equity ${eq.iloc[-1]:,.0f}  ({eq.iloc[-1] / initial - 1:+.1%} vs ${initial:,.0f} start)"
             f"  max drawdown {(eq / eq.cummax() - 1).min():+.1%}",
