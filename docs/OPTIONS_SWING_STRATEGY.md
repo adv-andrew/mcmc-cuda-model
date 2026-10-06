@@ -426,6 +426,28 @@ sized off total equity, T-bill interest on idle cash, 5 bps per core trade.
 - Twelve percent of the account per trade (70% core) raises CAGR to ~18% but
   the drawdown to −43%. That's a risk-preference choice, not an improvement.
 
+### Sizing menu (`scripts/research_sizing.py`)
+
+Option risk per trade vs result, 1996-2026, single account. Core weight
+shrinks at higher risk so everything fits: core = min(85%, 1 − 2 × risk − 3%).
+
+| Risk / trade | Core | CAGR (base) | Max DD (base) | Sharpe (base) | CAGR (harsh) | Max DD (harsh) | Sharpe (harsh) |
+|---|---|---|---|---|---|---|---|
+| 3% | 85% | +11.2% | −24.6% | 0.66 | +9.8% | −24.5% | 0.58 |
+| 4.5% | 85% | +12.4% | −25.9% | 0.67 | +10.3% | −25.8% | 0.56 |
+| **6% (default)** | 85% | **+13.5%** | −27.2% | 0.67 | +10.7% | −28.9% | 0.54 |
+| 8% | 81% | +14.8% | −31.4% | 0.67 | +11.0% | −32.9% | 0.52 |
+| 10% | 77% | +15.9% | −35.7% | 0.66 | +11.2% | −37.4% | 0.50 |
+| 12% | 73% | +17.0% | −39.9% | 0.66 | +11.4% | −42.4% | 0.48 |
+
+With base pricing, risk-adjusted return is the same at every size, so more
+risk buys proportionally more return. With harsh pricing, bigger sizes add
+almost no return but a lot more drawdown. **6% is the knee**; 4.5% is the
+cautious choice if you doubt the option pricing. Full Kelly on the trade
+distribution is ~70% of equity per trade (46% if the edge is 40% smaller).
+The default is about 1/10 Kelly, because concurrent trades and the core are
+correlated in crashes.
+
 **How to run it:** the scanner prints the core instruction at the top.
 Re-check it at the last close of each month; the "month-end re-check" line
 previews the rule using today's close.
