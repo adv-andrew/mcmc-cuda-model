@@ -8,11 +8,11 @@ Research summary (see docs/OPTIONS_SWING_STRATEGY.md and scripts/research_*):
   out-of-sample (2020-2026). Momentum-continuation and bearish setups are
   not, which is why the old trend-following MCMC slope had negative skill.
 - Of the option structures tested with realistic pricing (VIX-based IV,
-  skew, spreads, commissions), a single in-the-money call (~0.70 delta,
-  ~30 DTE) is the most robust: it was profitable on untouched 1991-2009
-  S&P 500 data and barely affected by the skew assumption. The 0.55/0.30
-  call debit spread scored higher on 2011-2026 but its edge depended on how
-  the short call is priced and faded on 1991-2009 (scripts/research_bias_checks.py).
+  skew, spreads, commissions), a single in-the-money call is the most
+  robust. The 0.80-delta, 30 DTE call held up to 10 days was chosen by a
+  pre-registered worst-case rule on 2011-2019 (scripts/research_robustness.py)
+  and validated on 2020-2026 and pre-2011 data. Debit spreads depend on the
+  call-skew assumption; options on less liquid ETFs lose the edge to bid/ask.
   Credit spreads win more often but lose money after costs on 3-5 day holds.
 - A pullback of at least 1.5 ATR from the 5-day high is the confirmation
   filter with the strongest in-sample evidence. Multi-timeframe alignment
@@ -26,11 +26,13 @@ Entry (at the close, signal computed a few minutes before the bell):
     any of: RSI(2) < 10 | (IBS < 0.25 and RSI(2) < 15) | close < lower
     Bollinger(20, 2) | pullback >= 2 ATR
 Position:
-    Buy a ~0.70-delta call, nearest Friday expiry >= 30 calendar days out
+    Buy a ~0.80-delta call, nearest Friday expiry >= 30 calendar days out
     (optionally a 0.55/0.30 call debit spread via ``structure_kind``).
+    Alternative vehicle: ~1/3 of the account in the ETF's shares, same exits;
+    the most reliable variant in testing (scripts/research_shares_vs_options.py).
 Exit (checked at each close):
     +60% gain (spreads: of max profit)  |  close > SMA(5) after >= 3 trading days held  |
-    7 trading days held  |  expiry
+    10 trading days held  |  expiry
 """
 
 from __future__ import annotations
@@ -70,15 +72,17 @@ class SwingConfig:
     # structure: "long_call" (default, most robust) or "call_debit_spread"
     structure_kind: str = "long_call"
     dte: int = 30
-    long_delta: float = 0.70
+    long_delta: float = 0.80
     short_delta: float = 0.30  # only used by call_debit_spread
     # exits
     min_hold: int = 3
-    max_hold: int = 7
+    max_hold: int = 10
     profit_target: float = 0.60
     # portfolio
-    risk_per_trade: float = 0.05
+    risk_per_trade: float = 0.06
     max_concurrent: int = 2
+    # shares alternative (most reliable vehicle in research_shares_vs_options.py)
+    shares_position_frac: float = 0.33
     # confidence tiers (score is 40 / 70 / 100)
     high_confidence: int = 100
     medium_confidence: int = 70
@@ -186,6 +190,7 @@ class TradeTicket:
     take_profit_value: float
     atm_iv: float
     long_delta: float
+    shares_position_frac: float = 0.0
     reasons: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -242,6 +247,7 @@ def build_ticket(
             pos.max_loss if math.isinf(pos.max_profit) else pos.max_profit), 2),
         atm_iv=round(atm_iv, 4),
         long_delta=round(bs_delta(spot, legs[0].strike, t, atm_iv, rate, True), 2),
+        shares_position_frac=cfg.shares_position_frac,
         reasons=reasons,
     )
 

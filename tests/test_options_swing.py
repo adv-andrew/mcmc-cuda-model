@@ -94,7 +94,8 @@ def test_ticket_default_is_itm_call():
     t = build_ticket("SPY", f, 0.18, SwingConfig())
     assert t.short_strike is None and t.max_profit is None
     assert t.long_strike < t.spot  # in the money
-    assert 0.62 <= t.long_delta <= 0.78
+    assert 0.72 <= t.long_delta <= 0.88
+    assert t.shares_position_frac == pytest.approx(0.33)
     assert t.est_debit > t.spot - t.long_strike  # intrinsic plus some time value
     assert t.take_profit_value == pytest.approx(1.6 * t.est_debit, abs=0.02)
 
@@ -119,7 +120,8 @@ def test_config_loads_from_yaml():
     assert cfg.symbols == ("SPY", "QQQ", "IWM")
     assert cfg.min_hold == 3
     assert cfg.structure().kind == "long_call"
-    assert cfg.long_delta == 0.70 and cfg.dte == 30
+    assert cfg.long_delta == 0.80 and cfg.dte == 30
+    assert cfg.max_hold == 10 and cfg.risk_per_trade == 0.06
 
 
 # ----------------------------------------------------------------------

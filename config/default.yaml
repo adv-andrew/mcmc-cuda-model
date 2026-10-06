@@ -54,19 +54,21 @@ options_swing:
   deep_pullback_atr: 2.0
   require_weekly_trend: false
   # structure: long_call (default) buys one ~long_delta call; call_debit_spread
-  # also sells a short_delta call. The single ITM call was the most robust in
-  # the bias checks (untouched 1991-2009 data, harsher skew/cost assumptions).
+  # also sells a short_delta call. 0.80-delta / 30 DTE / hold<=10 was chosen by
+  # a pre-registered worst-case rule (scripts/research_robustness.py).
   structure_kind: long_call
   dte: 30
-  long_delta: 0.70
+  long_delta: 0.80
   short_delta: 0.30
   # exits
   min_hold: 3
-  max_hold: 7
+  max_hold: 10
   profit_target: 0.60   # gain on the debit (spreads: fraction of max profit)
   # portfolio
-  risk_per_trade: 0.05  # debit paid (= max loss) as a fraction of equity
+  risk_per_trade: 0.06  # premium paid (= max loss) as a fraction of equity
   max_concurrent: 2
+  # shares alternative: fraction of equity per position (3 ETFs -> <= ~100%)
+  shares_position_frac: 0.33
   # confidence tiers (score is 40 / 70 / 100; see confidence_score)
   high_confidence: 100
   medium_confidence: 70

@@ -139,3 +139,46 @@ def test_load_long_history_splices_recent_mirror(tmp_path):
 def test_etf_split_table():
     idx = pd.to_datetime(["2025-12-04", "2025-12-05"])
     assert md.split_factor(idx, "XLK").tolist() == [2.0, 1.0]
+
+
+# ----------------------------------------------------------------------
+# shares backtester
+# ----------------------------------------------------------------------
+
+def test_shares_backtester_pnl_and_costs():
+    from backtesting.shares_backtest import SharesSwingBacktester
+
+    idx = pd.bdate_range("2022-01-03", periods=20)
+    close = pd.Series(100.0 * 1.01 ** np.arange(20), index=idx)
+    entries = pd.Series(False, index=idx)
+    entries.iloc[0] = True
+    exits = ExitRules(min_hold=3, max_hold=5, signal_exit=False, profit_target=None)
+    bt = SharesSwingBacktester(exits, position_frac=0.5, max_concurrent=1, cost_bps=10)
+    res = bt.run({"X": close}, {"X": entries}, {"X": pd.Series(False, index=idx)})
+    assert len(res.trades) == 1
+    t = res.trades[0]
+    assert t.days_held == 5 and t.exit_reason == "time"
+    gross = 1.01 ** 5 - 1
+    assert t.ret_on_risk == pytest.approx((1 + gross) * (1 - 0.001) - 1)
+    # equity: half invested, both legs pay 10 bps
+    expected = 100_000 * 0.5 * (1.01 ** 5) * (1 - 0.001) + 100_000 * 0.5 * (1 - 0.001)
+    assert res.equity.iloc[-1] == pytest.approx(expected)
+
+
+def test_shares_backtester_slots_and_signal_exit():
+    from backtesting.shares_backtest import SharesSwingBacktester
+
+    idx = pd.bdate_range("2022-01-03", periods=30)
+    close = pd.Series(100.0, index=idx)
+    entries = pd.Series(True, index=idx)
+    ex = pd.Series(False, index=idx)
+    ex.iloc[[4, 12, 20]] = True
+    bt = SharesSwingBacktester(ExitRules(min_hold=3, max_hold=10), position_frac=0.3,
+                               max_concurrent=2, cost_bps=0)
+    res = bt.run({"A": close, "B": close, "C": close},
+                 {"A": entries, "B": entries, "C": entries}, {s: ex for s in "ABC"})
+    tf = res.trade_frame()
+    for d in idx:
+        assert ((tf.entry_date <= d) & (tf.exit_date > d)).sum() <= 2
+    assert (tf[tf.exit_reason == "signal"].days_held >= 3).all()
+    assert res.equity.iloc[-1] == pytest.approx(100_000)

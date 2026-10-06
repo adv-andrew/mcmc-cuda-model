@@ -69,6 +69,9 @@ def main() -> None:
             print(f"     take profit when the position is worth ${t['take_profit_value']:.2f} "
                   f"(+{cfg.profit_target:.0%} {target})")
             print(f"     why: {', '.join(t['reasons'])}")
+            print(f"     shares alternative (most reliable in testing): buy "
+                  f"{t['shares_position_frac']:.0%} of the account in {sym} at the close, "
+                  f"same exits")
         print(f"     if already holding: exit signal (close > 5-day SMA) = "
               f"{'YES' if st['exit_signal_if_held'] else 'no'}")
 
