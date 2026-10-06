@@ -219,7 +219,11 @@ class OptionsSwingBacktester:
         skew: Optional[SkewModel] = None,
         cost_multiplier: float = 1.0,
         etfs: tuple = ("SPY", "QQQ", "IWM", "DIA"),
+        tight_cost_symbols: Optional[tuple] = None,
     ) -> None:
+        """``etfs`` get the $1 ETF strike grid. ``tight_cost_symbols`` (default:
+        same as ``etfs``) get the tight ETF bid/ask tier; everything else pays
+        the wider stock tier."""
         self.structure = structure
         self.exits = exits
         self.risk_per_trade = risk_per_trade
@@ -228,10 +232,11 @@ class OptionsSwingBacktester:
         self.skew = skew or SkewModel()
         self.cost_multiplier = cost_multiplier
         self.etfs = set(etfs)
+        self.tight = set(etfs if tight_cost_symbols is None else tight_cost_symbols)
 
     def _costs(self, symbol: str, price_scale: float = 1.0) -> CostModel:
         """Costs in the (possibly split-adjusted) price units of the backtest."""
-        base = CostModel.etf() if symbol in self.etfs else CostModel.stock()
+        base = CostModel.etf() if symbol in self.tight else CostModel.stock()
         c = base.scaled(self.cost_multiplier)
         if price_scale != 1.0:  # $ minimums apply at the traded price
             c = CostModel(c.min_half_spread / price_scale, c.pct_half_spread,
@@ -418,3 +423,121 @@ def monte_carlo_equity(
         "median_max_dd": float(np.median(dd)),
         "p95_max_dd": float(np.percentile(dd, 5)),
     }
+
+
+# ----------------------------------------------------------------------
+# Per-trade simulation (research / robustness testing)
+# ----------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PricingScenario:
+    """Pricing / execution assumptions for stress testing.
+
+    ``entry_iv_mult`` scales implied vol *only* when the position is opened,
+    modelling paying up for short-dated vol on dip days. Delays shift the
+    fill to that many trading days after the signal / exit trigger.
+    """
+
+    skew: SkewModel = field(default_factory=SkewModel)
+    entry_iv_mult: float = 1.0
+    cost_mult: float = 1.0
+    entry_delay: int = 0
+    exit_delay: int = 0
+
+
+def simulate_trades(
+    close: pd.Series,
+    atm_iv: pd.Series,
+    exit_sig: pd.Series,
+    spec: StructureSpec,
+    exits: ExitRules,
+    scenario: Optional[PricingScenario] = None,
+    base_costs: Optional[CostModel] = None,
+    entry_dates: Optional[pd.DatetimeIndex] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    is_etf: bool = True,
+    price_scale: Optional[pd.Series] = None,
+) -> pd.DataFrame:
+    """Simulate one independent bullish trade per entry date (no portfolio).
+
+    With ``entry_dates=None`` a trade is simulated for *every* day in
+    ``[start, end)``, which is what placebo tests need. Returns, indexed by
+    signal date: ``ret`` (return on capital at risk), ``held`` (trading days),
+    ``und_ret`` (underlying return over the same window) and ``reason``.
+    """
+    sc = scenario or PricingScenario()
+    costs = (base_costs or CostModel.etf()).scaled(sc.cost_mult)
+    dates = close.index
+    px = close.to_numpy(dtype=float)
+    ivs = atm_iv.reindex(dates).ffill().to_numpy(dtype=float)
+    ext = exit_sig.reindex(dates).fillna(False).to_numpy(dtype=bool)
+    scale = (price_scale.reindex(dates).ffill().bfill().to_numpy(dtype=float)
+             if price_scale is not None else np.ones(len(dates)))
+    lo = dates.searchsorted(pd.Timestamp(start)) if start else 0
+    hi = dates.searchsorted(pd.Timestamp(end)) if end else len(dates)
+    last_ok = len(dates) - exits.max_hold - sc.exit_delay - sc.entry_delay - 1
+    if entry_dates is None:
+        idx = range(lo, min(hi, last_ok))
+    else:
+        pos_idx = dates.get_indexer(pd.DatetimeIndex(entry_dates))
+        idx = [i for i in pos_idx if i >= lo and i < min(hi, last_ok) and i >= 0]
+
+    rows = []
+    for i in idx:
+        e = i + sc.entry_delay
+        if np.isnan(ivs[e]) or np.isnan(px[e]):
+            continue
+        spot, date = px[e], dates[e]
+        c_in = CostModel(costs.min_half_spread / scale[e], costs.pct_half_spread,
+                         costs.commission_per_contract / scale[e])
+        legs = build_legs(spec, +1, spot, spec.dte / CALENDAR_DAYS, ivs[e] * sc.entry_iv_mult,
+                          risk_free_rate(date), sc.skew, is_etf, scale[e])
+        pos = open_position(legs, spot, date, spec.dte, ivs[e] * sc.entry_iv_mult, sc.skew, c_in)
+        j, reason = e, "time"
+        while True:
+            j += 1
+            held = j - e
+            c_j = CostModel(costs.min_half_spread / scale[j], costs.pct_half_spread,
+                            costs.commission_per_contract / scale[j])
+            value = close_value(pos, px[j], dates[j], ivs[j], sc.skew, c_j)
+            if (pos.expiry - dates[j]).days <= 0:
+                reason = "expiry"
+                break
+            if (exits.stop_loss is not None
+                    and position_return(pos, value) <= exits.stop_loss):
+                reason = "stop"
+                break
+            if (exits.profit_target is not None
+                    and profit_fraction(pos, value) >= exits.profit_target):
+                reason = "target"
+                break
+            if exits.signal_exit and held >= exits.min_hold and ext[j]:
+                reason = "signal"
+            if reason == "signal" or held >= exits.max_hold:
+                if sc.exit_delay:
+                    j += sc.exit_delay
+                    c_j = CostModel(costs.min_half_spread / scale[j], costs.pct_half_spread,
+                                    costs.commission_per_contract / scale[j])
+                    value = close_value(pos, px[j], dates[j], ivs[j], sc.skew, c_j)
+                break
+        rows.append((dates[i], position_return(pos, value), j - e, px[j] / spot - 1.0, reason))
+    return pd.DataFrame(rows, columns=["date", "ret", "held", "und_ret", "reason"]).set_index("date")
+
+
+def non_overlapping_entries(signal: pd.Series, held: pd.Series) -> pd.DatetimeIndex:
+    """Entry dates a single-position-per-symbol strategy would actually take.
+
+    ``held`` maps each candidate date to its holding period (trading days);
+    a new entry is allowed only after the previous trade has exited.
+    """
+    sig_dates = signal.index[signal.fillna(False).to_numpy(dtype=bool)]
+    taken, busy_until = [], -1
+    pos = held.index
+    for d in sig_dates:
+        k = pos.get_indexer([d])[0]
+        if k < 0 or k <= busy_until:
+            continue
+        taken.append(d)
+        busy_until = k + int(held.iloc[k])
+    return pd.DatetimeIndex(taken)

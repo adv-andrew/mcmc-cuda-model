@@ -22,10 +22,8 @@ import sys
 
 sys.path.insert(0, ".")
 
-import io
 import math
 import urllib.request
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -33,17 +31,13 @@ import pandas as pd
 from scipy.stats import norm
 
 from backtesting.market_data import load_universe
-from backtesting.options_backtest import OptionsSwingBacktester, build_legs
-from backtesting.options_pricing import (
-    CostModel,
-    SkewModel,
-    atm_iv_series,
-    close_value,
-    open_position,
-    position_return,
-    profit_fraction,
-    risk_free_rate,
+from backtesting.options_backtest import (
+    OptionsSwingBacktester,
+    PricingScenario,
+    non_overlapping_entries,
+    simulate_trades,
 )
+from backtesting.options_pricing import SkewModel, atm_iv_series
 from trading.features import build_features
 from trading.options_swing import SwingConfig, confidence_score, entry_signal, exit_signal
 
@@ -53,13 +47,7 @@ OUT = Path("data/results")
 RNG = np.random.default_rng(42)
 
 
-@dataclass(frozen=True)
-class Scenario:
-    skew: SkewModel = field(default_factory=SkewModel)
-    entry_iv_mult: float = 1.0
-    cost_mult: float = 1.0
-    entry_delay: int = 0
-    exit_delay: int = 0
+Scenario = PricingScenario  # backwards-compatible name
 
 
 # ----------------------------------------------------------------------
@@ -86,56 +74,14 @@ def load_spx() -> pd.DataFrame:
 
 def simulate_all_days(f: pd.DataFrame, iv: pd.Series, cfg: SwingConfig, sc: Scenario,
                       start: str, end: str) -> pd.DataFrame:
-    """Simulate the strategy's option trade as if entered on *every* day.
-
-    Returns per entry day: option return on risk, days held, and the
-    underlying's return over the same holding window.
-    """
-    close = f["close"].to_numpy()
-    ivs = iv.reindex(f.index).ffill().to_numpy()
-    ext = exit_signal(f).to_numpy()
-    dates = f.index
-    spec = cfg.structure()
-    costs = CostModel.etf().scaled(sc.cost_mult)
-    lo = dates.searchsorted(pd.Timestamp(start))
-    hi = dates.searchsorted(pd.Timestamp(end))
-    rows = []
-    for i in range(lo, min(hi, len(dates) - cfg.max_hold - sc.exit_delay - sc.entry_delay - 2)):
-        e = i + sc.entry_delay  # actual fill day
-        if np.isnan(ivs[e]) or np.isnan(close[e]):
-            continue
-        spot, date = close[e], dates[e]
-        t = spec.dte / 365.0
-        legs = build_legs(spec, +1, spot, t, ivs[e] * sc.entry_iv_mult, risk_free_rate(date),
-                          sc.skew, True)
-        pos = open_position(legs, spot, date, spec.dte, ivs[e] * sc.entry_iv_mult, sc.skew, costs)
-        j = e
-        while True:
-            j += 1
-            held = j - e
-            value = close_value(pos, close[j], dates[j], ivs[j], sc.skew, costs)
-            if profit_fraction(pos, value) >= cfg.profit_target:
-                break
-            if (held >= cfg.min_hold and ext[j]) or held >= cfg.max_hold:
-                if sc.exit_delay:
-                    j += sc.exit_delay
-                    value = close_value(pos, close[j], dates[j], ivs[j], sc.skew, costs)
-                break
-        rows.append((dates[i], position_return(pos, value), j - e, close[j] / spot - 1.0))
-    return pd.DataFrame(rows, columns=["date", "ret", "held", "und_ret"]).set_index("date")
+    """Simulate the strategy's option trade as if entered on *every* day."""
+    return simulate_trades(f["close"], iv, exit_signal(f), cfg.structure(), cfg.exits(), sc,
+                           start=start, end=end)
 
 
-def strategy_days(sig: pd.Series, held: pd.Series) -> list:
+def strategy_days(sig: pd.Series, held: pd.Series) -> pd.DatetimeIndex:
     """Entry days the single-symbol strategy would actually take (no overlap)."""
-    taken, busy_until = [], None
-    for d in sig.index[sig.to_numpy()]:
-        if d not in held.index:
-            continue
-        if busy_until is None or d > busy_until:
-            taken.append(d)
-            k = held.index.get_loc(d)
-            busy_until = held.index[min(k + int(held.loc[d]), len(held) - 1)]
-    return taken
+    return non_overlapping_entries(sig, held)
 
 
 def stats(r: pd.Series) -> str:

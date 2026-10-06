@@ -12,6 +12,9 @@ Sources
   github.com/abi1010-git/predicting-stock-market-personal-project
 - CBOE VIX index (1990-present):
   github.com/datasets/finance-vix
+- Broader ETF universe (DIA, MDY, IJR, RSP, sector SPDRs, EFA, EEM, ...;
+  1995-present) from the ``prices.parquet`` release asset of
+  github.com/Johnbrick123/sp500-data (downloaded once, ~160 MB, cached)
 
 Returned frames use a tz-naive ``DatetimeIndex`` and the columns
 ``Open, High, Low, Close, AdjClose, Volume``. ``Close`` is split-adjusted
@@ -39,6 +42,10 @@ GITHUB_VIX_URL = (
     "https://raw.githubusercontent.com/datasets/finance-vix/main/data/vix-daily.csv"
 )
 GITHUB_SYMBOLS = frozenset({"SPY", "QQQ", "IWM", "AAPL", "NVDA"})
+RELEASE_PARQUET_URL = (
+    "https://github.com/Johnbrick123/sp500-data/releases/download/data/prices.parquet"
+)
+RELEASE_TTL_HOURS = 24
 
 DEFAULT_CACHE_DIR = Path("data/cache/daily")
 CACHE_TTL_HOURS = 12
@@ -80,6 +87,34 @@ def _normalise_vix(raw: pd.DataFrame) -> pd.DataFrame:
     df["AdjClose"] = df["Close"]
     df["Volume"] = 0.0
     return df[COLUMNS].astype(float)
+
+
+def _release_table(cache_dir: Path, refresh: bool = False) -> Optional[pd.DataFrame]:
+    """Download (or reuse) the multi-ticker release parquet; None if unavailable."""
+    path = cache_dir / "release_prices.parquet"
+    if refresh or not _cache_fresh(path, RELEASE_TTL_HOURS):
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(_http_get(RELEASE_PARQUET_URL, timeout=600))
+            tmp.replace(path)
+        except Exception as exc:
+            logger.warning("Release parquet download failed: %s", exc)
+    if not path.exists():
+        return None
+    return pd.read_parquet(path, columns=["date", "ticker", "open", "high", "low",
+                                          "close", "adj_close", "volume"])
+
+
+def _normalise_release(table: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    df = table[table["ticker"] == symbol].rename(columns={
+        "date": "Date", "open": "Open", "high": "High", "low": "Low",
+        "close": "Close", "adj_close": "AdjClose", "volume": "Volume",
+    })
+    if df.empty:
+        return pd.DataFrame(columns=COLUMNS)
+    df = df.assign(Date=pd.to_datetime(df["Date"])).set_index("Date").sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    return df[COLUMNS].astype(float).dropna(subset=["Close"])
 
 
 def _fetch_yfinance(symbol: str) -> pd.DataFrame:
@@ -124,6 +159,11 @@ def load_daily(
     except Exception as exc:  # network / parse failure
         logger.warning("GitHub mirror failed for %s: %s", symbol, exc)
 
+    if (df is None or df.empty) and symbol != "VIX":
+        table = _release_table(cache_dir, refresh)
+        if table is not None:
+            df = _normalise_release(table, symbol)
+
     if df is None or df.empty:
         try:
             df = _fetch_yfinance(("^" + symbol) if symbol == "VIX" else symbol)
@@ -147,6 +187,19 @@ def load_daily(
 SPLITS = {
     "AAPL": [("2014-06-09", 7.0), ("2020-08-31", 4.0)],
     "NVDA": [("2021-07-20", 4.0), ("2024-06-10", 10.0)],
+    "QQQ": [("2000-03-20", 2.0)],
+    "IWM": [("2005-06-09", 2.0)],
+    "IJR": [("2005-06-09", 3.0), ("2017-01-19", 2.0)],
+    "EFA": [("2005-06-09", 3.0)],
+    "EEM": [("2005-06-09", 3.0), ("2008-07-24", 3.0)],
+    "RSP": [("2006-04-27", 4.0)],
+    # 2016 XLRE spin-off was applied as a price adjustment factor
+    "XLF": [("2016-09-19", 1.231)],
+    "XLB": [("2025-12-05", 2.0)],
+    "XLE": [("2025-12-05", 2.0)],
+    "XLK": [("2025-12-05", 2.0)],
+    "XLU": [("2025-12-05", 2.0)],
+    "XLY": [("2025-12-05", 2.0)],
 }
 
 
@@ -161,6 +214,24 @@ def split_factor(index: pd.DatetimeIndex, symbol: str) -> pd.Series:
 def traded_close(df: pd.DataFrame, symbol: str) -> pd.Series:
     """Close as it actually printed on the day (split-unadjusted)."""
     return df["Close"] * split_factor(df.index, symbol)
+
+
+def load_long_history(
+    symbol: str, cache_dir: Path | str = DEFAULT_CACHE_DIR, refresh: bool = False
+) -> pd.DataFrame:
+    """Longest available history: release-parquet data (back to the 1990s)
+    spliced with the primary mirror for any newer dates."""
+    symbol = symbol.upper().lstrip("^")
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    recent = load_daily(symbol, cache_dir=cache_dir, refresh=refresh)
+    table = _release_table(cache_dir, refresh)
+    if table is None:
+        return recent
+    old = _normalise_release(table, symbol)
+    if old.empty:
+        return recent
+    return pd.concat([old, recent[recent.index > old.index[-1]]]).sort_index()
 
 
 def load_universe(
