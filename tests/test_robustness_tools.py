@@ -225,3 +225,48 @@ def test_options_backtester_cash_yield_toggle():
         {"SPY": f}, {"SPY": iv}, {"SPY": entries}, {"SPY": ex})
     assert on.equity.iloc[-1] > off.equity.iloc[-1]
     assert len(on.trades) == len(off.trades)
+
+
+# ----------------------------------------------------------------------
+# portfolio building blocks
+# ----------------------------------------------------------------------
+
+def test_faber_signal_uses_completed_months_only():
+    from backtesting.portfolio import faber_signal
+
+    idx = pd.bdate_range("2019-01-01", "2021-12-31")
+    close = pd.Series(np.linspace(100, 200, len(idx)), index=idx)
+    sig = faber_signal(close)
+    assert not sig.loc["2019-06"].any()          # < 10 completed months
+    assert sig.loc["2021-06"].all()               # steady uptrend
+    # truncating the future must not change past values
+    cut = faber_signal(close.loc[:"2020-12-31"])
+    assert (sig.loc[:"2020-12-31"] == cut).all()
+
+
+def test_trend_core_holds_asset_or_cash():
+    from backtesting.portfolio import trend_core_returns
+
+    idx = pd.bdate_range("2023-01-02", periods=6)
+    px = pd.Series([100, 101, 102, 103, 104, 105.0], index=idx)
+    sig = pd.Series([False, True, True, False, False, False], index=idx)
+    r = trend_core_returns(px, sig, switch_cost_bps=0, cash_yield=False)
+    # signal at t-1 decides exposure for day t
+    assert r.iloc[1] == 0.0
+    assert r.iloc[2] == pytest.approx(102 / 101 - 1)
+    assert r.iloc[3] == pytest.approx(103 / 102 - 1)
+    assert r.iloc[4] == 0.0
+    costly = trend_core_returns(px, sig, switch_cost_bps=10, cash_yield=False)
+    assert costly.iloc[2] == pytest.approx(r.iloc[2] - 0.001)
+
+
+def test_blend_weights():
+    from backtesting.portfolio import blend
+
+    idx = pd.bdate_range("2023-01-02", periods=3)
+    a = pd.Series([0.0, 0.10, 0.0], index=idx)
+    b = pd.Series([0.0, -0.10, 0.0], index=idx)
+    eq = blend({"a": a, "b": b}, {"a": 0.5, "b": 0.5})
+    assert eq.iloc[-1] == pytest.approx(100_000)
+    with pytest.raises(ValueError):
+        blend({"a": a, "b": b}, {"a": 0.7, "b": 0.7})
