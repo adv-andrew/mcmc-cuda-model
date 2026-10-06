@@ -498,6 +498,21 @@ A replay from 2 January 2025 to 5 October 2026 made 40 option trades: 68% won,
 averaging +3.6% per trade, and the account rose 23.5% with a −15.9% max
 drawdown through the April 2025 tariff shock.
 
+### SPY-only vs three-index core (`scripts/research_core_universe.py`)
+
+This was a single pre-registered test: a core of one-third each SPY/QQQ/IWM,
+each with its own 10-month filter. It had to beat the SPY core on excess
+Sharpe in all three eras to be adopted.
+
+| Core + options | Sharpe 2001-10 | 2011-19 | 2020-26 | Worst year 2020-26 | CAGR 2001-26 |
+|---|---|---|---|---|---|
+| SPY core (kept) | **0.55** | 0.71 | 0.65 | −22.6% | +11.9% |
+| SPY/QQQ/IWM core | 0.46 | **0.74** | **0.70** | **−14.2%** | +12.2% |
+
+It was better in the QQQ-led 2010s and 2020s but worse through the 2000-02
+tech crash: the hindsight pattern the every-era rule is there to catch. The
+SPY core stays.
+
 ### What to expect (`scripts/research_outcomes.py`)
 
 A block bootstrap of the 1996-2026 daily returns (10,000 paths, ~1-month
