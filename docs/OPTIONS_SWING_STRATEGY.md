@@ -443,6 +443,22 @@ sized off total equity, T-bill interest on idle cash, 5 bps per core trade.
 - Twelve percent of the account per trade (70% core) raises CAGR to ~18% but
   the drawdown to −43%. That's a risk-preference choice, not an improvement.
 
+### Where portfolio mode loses money
+
+| Year | Portfolio | Core only | SPY | What happened |
+|---|---|---|---|---|
+| 2008 | −1.2% | +0.6% | −36.8% | Core out of the market almost all year |
+| 2001-2002 | +6.8% / −5.9% | +3.5% / −2.5% | −11.8% / −21.6% | Core mostly out |
+| 2011 | −9.7% | −4.6% | +1.9% | Sharp V-shaped correction inside an uptrend |
+| 2018 | −11.0% | −3.0% | −4.6% | Same pattern (February and Q4 selloffs) |
+| **2022** | **−21.5%** | −16.7% | −18.2% | **Whipsaw**: the trend signal flipped in and out on bear-market rallies, and all 4 dip trades lost |
+
+The worst drawdown, −27.2%, ran from January 2022 to March 2023 and was
+recovered by February 2024. The strategy is strongest in slow bear markets
+(2001-02, 2008) and weakest in fast, choppy reversals, the textbook
+trend-following profile. The best years (2013 +57%, 2024 +42%, 1997 +45%,
+2017 +40%) were steady uptrends with many quick dip recoveries.
+
 ### Sizing menu (`scripts/research_sizing.py`)
 
 Option risk per trade vs result, 1996-2026, single account. Core weight
