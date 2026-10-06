@@ -89,7 +89,15 @@ class CoreOverlayEngine:
         switch_cost_bps: float = 5.0,
         skew: Optional[SkewModel] = None,
         cost_mult: float = 1.0,
+        whole_contracts: bool = False,
+        max_overshoot: float = 1.5,
     ) -> None:
+        """``whole_contracts`` buys an integer number of option contracts:
+        as many as fit in the target premium, or one if a single contract
+        costs at most ``max_overshoot`` x the target (otherwise the trade is
+        skipped). Fractional contracts (the default) match the research."""
+        self.whole_contracts = whole_contracts
+        self.max_overshoot = max_overshoot
         self.structure = structure
         self.exits = exits
         self.core_weight = core_weight
@@ -198,12 +206,20 @@ class CoreOverlayEngine:
                                   risk_free_rate(date), self.skew, True, sc)
                 pos = open_position(legs, spot, date, self.structure.dte, ivs[s], self.skew,
                                     self._costs(sc))
+                per_contract = pos.max_loss * sc * 100.0  # $ at the traded price
+                if self.whole_contracts:
+                    n = math.floor(risk / per_contract)
+                    if n == 0 and per_contract <= self.max_overshoot * risk:
+                        n = 1
+                    if n == 0 or n * per_contract > state.cash:
+                        continue
+                    risk = n * per_contract
                 state.cash -= risk
                 state.positions.append({
                     "id": f"{s}-{date.date()}", "symbol": s, "entry_date": str(date.date()),
                     "entry_spot": float(spot), "entry_iv": float(ivs[s]),
                     "model_debit": float(pos.max_loss), "risk": float(risk),
-                    "contracts": float(risk / (pos.max_loss * 100.0)),
+                    "contracts": float(risk / per_contract),
                     "days_held": 0, "pos": _pos_to_dict(pos), "last_value": float(risk),
                 })
 

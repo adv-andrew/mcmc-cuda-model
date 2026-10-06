@@ -87,6 +87,7 @@ def simulate_core_overlay(
     initial: float = 100_000.0,
     skew=None,
     cost_mult: float = 1.0,
+    whole_contracts: bool = False,
 ):
     """One brokerage account: core ETF shares + option premiums paid from cash.
 
@@ -123,7 +124,7 @@ def simulate_core_overlay(
              for s in symbols}
 
     engine = CoreOverlayEngine(structure, exits, core_weight, risk_per_trade, max_concurrent,
-                               switch_cost_bps, skew, cost_mult)
+                               switch_cost_bps, skew, cost_mult, whole_contracts)
     state = EngineState(cash=initial)
     last_i = len(dates) - 1
     for i, date in enumerate(dates):

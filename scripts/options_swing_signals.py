@@ -20,12 +20,14 @@ import pandas as pd
 from backtesting.market_data import load_universe
 from backtesting.options_pricing import atm_iv_series
 from trading.features import build_features
-from trading.options_swing import SwingConfig, core_status, scan
+from trading.options_swing import SwingConfig, contracts_for, core_status, scan
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="print machine-readable output")
+    ap.add_argument("--account", type=float, default=None,
+                    help="account size in $: prints whole contracts / shares to trade")
     args = ap.parse_args()
 
     cfg = SwingConfig.from_yaml()
@@ -62,6 +64,10 @@ def main() -> None:
         print(f"\nPORTFOLIO CORE: {state}")
         print(f"     {core['symbol']} {core['last_month_end']} close ${core['last_month_close']:.2f} "
               f"vs {cfg.faber_months}-month SMA ${core['sma']:.2f}")
+        if opts_account := args.account:
+            px = float(core_df["Close"].iloc[-1])
+            shares = int(core["core_weight"] * opts_account // px) if core["in_market"] else 0
+            print(f"     for a ${opts_account:,.0f} account: core = {shares} {core['symbol']} shares")
         print(f"     month-end re-check (using today's close): would be "
               f"{'IN' if core['month_end_preview_in'] else 'OUT'} "
               f"(SMA ${core['preview_sma']:.2f}); act on it at the last close of the month")
@@ -87,6 +93,16 @@ def main() -> None:
             target = "of max profit" if t["max_profit"] is not None else "gain"
             print(f"     take profit when the position is worth ${t['take_profit_value']:.2f} "
                   f"(+{cfg.profit_target:.0%} {target})")
+            if args.account:
+                n = contracts_for(t["est_debit"], args.account, cfg)
+                cost = n * t["est_debit"] * 100
+                if n:
+                    print(f"     for a ${args.account:,.0f} account: buy {n} contract(s) "
+                          f"(~${cost:,.0f}, {cost / args.account:.1%} of the account)")
+                else:
+                    print(f"     for a ${args.account:,.0f} account: SKIP the option - one contract "
+                          f"(${t['est_debit'] * 100:,.0f}) is over 1.5x your "
+                          f"{cfg.risk_per_trade:.0%} target; use the shares line instead")
             print(f"     why: {', '.join(t['reasons'])}")
             print(f"     shares alternative (most reliable in testing): buy "
                   f"{t['shares_position_frac']:.0%} of the account in {sym} at the close, "

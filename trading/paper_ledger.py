@@ -32,7 +32,9 @@ DEFAULT_LEDGER = Path("data/paper/ledger.json")
 
 class PaperLedger:
     def __init__(self, path: Path | str = DEFAULT_LEDGER, cfg: Optional[SwingConfig] = None,
-                 initial: float = 100_000.0) -> None:
+                 initial: float = 100_000.0, whole_contracts: bool = True) -> None:
+        """``whole_contracts`` (default) trades integer option contracts the
+        way a real account must; ``False`` reproduces the research sizing."""
         self.path = Path(path)
         self.cfg = cfg or SwingConfig.from_yaml()
         if self.path.exists():
@@ -42,11 +44,13 @@ class PaperLedger:
         else:
             self.state = EngineState(cash=float(initial))
             self.meta = {"initial": float(initial), "created": None,
+                         "whole_contracts": bool(whole_contracts),
                          "config": {k: (list(v) if isinstance(v, tuple) else v)
                                     for k, v in asdict(self.cfg).items()}}
         self.engine = CoreOverlayEngine(
             self.cfg.structure(), self.cfg.exits(), self.cfg.core_weight,
-            self.cfg.risk_per_trade, self.cfg.max_concurrent)
+            self.cfg.risk_per_trade, self.cfg.max_concurrent,
+            whole_contracts=self.meta.get("whole_contracts", whole_contracts))
 
     # ------------------------------------------------------------------
     def save(self) -> None:

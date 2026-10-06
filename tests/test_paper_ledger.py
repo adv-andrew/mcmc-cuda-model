@@ -57,8 +57,9 @@ def test_ledger_replay_matches_backtest_across_save_and_reload(market, tmp_path)
 
     path = tmp_path / "ledger.json"
     mid = market["SPY"].index[600]
-    PaperLedger(path, cfg).update(market, start=start, up_to=str(mid.date()))
-    resumed = PaperLedger(path, cfg)  # fresh object from JSON
+    PaperLedger(path, cfg, whole_contracts=False).update(market, start=start,
+                                                         up_to=str(mid.date()))
+    resumed = PaperLedger(path, cfg)  # fresh object from JSON; sizing mode persisted
     resumed.update(market)
 
     eq_l = pd.Series({pd.Timestamp(d): v for d, v in resumed.state.equity})
@@ -89,3 +90,24 @@ def test_fill_tracking_and_report(market, tmp_path):
     assert "WARNING" in text and "Equity $" in text
     with pytest.raises(KeyError):
         ledger.record_fill("NOPE-2020-01-01", 1.0)
+
+
+def test_whole_contract_ledger_buys_integers(market, tmp_path):
+    ledger = PaperLedger(tmp_path / "w.json", SwingConfig(), initial=250_000)
+    ledger.update(market, start="2021-03-01")
+    assert ledger.meta["whole_contracts"] is True
+    assert ledger.state.trades, "should have traded"
+    for p in ledger.state.positions:
+        assert abs(p["contracts"] - round(p["contracts"])) < 1e-9
+    for t in ledger.state.trades:
+        assert t["ret_on_risk"] >= -1.0
+
+
+def test_contracts_for():
+    from trading.options_swing import contracts_for
+
+    cfg = SwingConfig()  # 6% risk per trade
+    assert contracts_for(20.0, 100_000, cfg) == 3      # $6,000 / $2,000
+    assert contracts_for(46.0, 100_000, cfg) == 1      # $4,600 fits under $6,000
+    assert contracts_for(46.0, 60_000, cfg) == 1       # $4,600 <= 1.5 x $3,600
+    assert contracts_for(46.0, 25_000, cfg) == 0       # $4,600 > 1.5 x $1,500 -> skip

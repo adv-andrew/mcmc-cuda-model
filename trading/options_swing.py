@@ -258,6 +258,24 @@ def build_ticket(
     )
 
 
+def contracts_for(est_debit: float, account: float, cfg: SwingConfig,
+                  max_overshoot: float = 1.5) -> int:
+    """Whole option contracts to buy for a ``account``-dollar account.
+
+    As many as fit in ``risk_per_trade`` x account, or one if a single
+    contract costs at most ``max_overshoot`` x that target; 0 means skip
+    (same rule as the engine's ``whole_contracts`` mode).
+    """
+    target = cfg.risk_per_trade * account
+    per_contract = est_debit * 100.0
+    if per_contract <= 0:
+        return 0
+    n = int(target // per_contract)
+    if n == 0 and per_contract <= max_overshoot * target:
+        n = 1
+    return n
+
+
 def core_status(close: pd.Series, cfg: SwingConfig) -> dict:
     """Trend-core instruction from daily closes of ``cfg.core_symbol``.
 

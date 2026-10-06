@@ -119,6 +119,7 @@ T-bills (not credited above).
 | Command | Description |
 |---|---|
 | `python scripts/options_swing_signals.py` | **Today's signals**: core instruction, order tickets, exit status |
+| `python scripts/options_swing_signals.py --account 50000` | Same, with exact whole-contract and share counts for your account |
 | `python scripts/paper_trade.py update` / `report` / `fill ID PRICE` | **Paper-trade** portfolio mode with the backtest engine; tracks real fills vs model |
 | `python scripts/backtest_options_swing.py` | Backtest, per-year/tier tables, stress tests, Monte Carlo sizing |
 | `python scripts/research_strategy_lab.py` | Event study: 34 setups × 1/2/3/5/10-day holds, IS vs OOS |

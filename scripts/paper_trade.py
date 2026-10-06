@@ -30,10 +30,12 @@ def main() -> None:
     ap.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     ap.add_argument("--start", help="first day for a NEW ledger (default: latest bar)")
     ap.add_argument("--initial", type=float, default=100_000.0)
+    ap.add_argument("--fractional", action="store_true",
+                    help="fractional option contracts (research sizing) for a NEW ledger")
     opts = ap.parse_args()
 
     cfg = SwingConfig.from_yaml()
-    ledger = PaperLedger(opts.ledger, cfg, opts.initial)
+    ledger = PaperLedger(opts.ledger, cfg, opts.initial, whole_contracts=not opts.fractional)
     if opts.command == "fill":
         if len(opts.args) != 2:
             ap.error("usage: fill <position-id> <actual price per share>")

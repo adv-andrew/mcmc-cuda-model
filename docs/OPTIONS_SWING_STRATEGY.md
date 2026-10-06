@@ -448,6 +448,24 @@ distribution is ~70% of equity per trade (46% if the edge is 40% smaller).
 The default is about 1/10 Kelly, because concurrent trades and the core are
 correlated in crashes.
 
+### Account size and whole contracts (`scripts/research_account_size.py`)
+
+Real options trade in whole contracts. With integer contracts (buy as many
+as fit in 6% of the account, or one if a single contract costs ≤ 1.5× that),
+results match fractional sizing for accounts of $50k and up: 2011-start CAGR
+13.0-13.4% vs 13.5% fractional. At 2026 prices a 0.80Δ 30-day call costs
+about $4,600 (SPY), $5,100 (QQQ) and $2,200 (IWM). So:
+
+| Account | What actually trades |
+|---|---|
+| ≥ ~$60k | the full SPY/QQQ/IWM rotation |
+| ~$25-60k | mostly IWM (SPY/QQQ contracts too large) |
+| < ~$25k | almost no options. A $10k account starting in 2020 made 5 option trades and ~9% a year (core only). Use the shares line for dips |
+
+`python scripts/options_swing_signals.py --account 50000` prints the exact
+number of contracts (or "skip, use shares") and the core share count. The
+paper ledger trades whole contracts by default.
+
 ### Paper trading with the backtest engine
 
 `scripts/paper_trade.py` keeps a ledger (`data/paper/ledger.json`, not
