@@ -3,7 +3,8 @@
 Monte Carlo research and trading toolkit for options. The main strategy is
 the **Options Swing Strategy**: in-the-money calls on SPY / QQQ / IWM, bought
 when an index ETF pulls back sharply inside a long-term uptrend, and held
-about 3-7 trading days until it recovers.
+about 3-10 trading days until it recovers. The same signal traded in shares
+was the most reliable variant tested.
 
 > Full research write-up: [`docs/OPTIONS_SWING_STRATEGY.md`](docs/OPTIONS_SWING_STRATEGY.md)
 
@@ -31,9 +32,10 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
 | **Universe** | SPY, QQQ, IWM |
 | **Setup** | Close > 200-day SMA **and** ≥ 1.5 ATR below the 5-day high |
 | **Trigger** (any) | RSI(2) < 10 · IBS < 0.25 with RSI(2) < 15 · close < lower Bollinger(20, 2) · pullback ≥ 2 ATR |
-| **Position** | Buy one ~0.70Δ (in-the-money) call, nearest Friday ≥ 30 days out |
-| **Exit** | First close above the 5-day SMA after ≥ 3 days held · or day 7 · or +60% |
-| **Size** | 5% of equity per position (premium = max loss), max 2 open |
+| **Position** | Buy one ~0.80Δ (in-the-money) call, nearest Friday ≥ 30 days out |
+| **Alternative** | Buy ~1/3 of the account in the ETF's shares, same exits (most reliable) |
+| **Exit** | First close above the 5-day SMA after ≥ 3 days held · or day 10 · or +60% |
+| **Size** | 6% of equity per position (premium = max loss), max 2 open |
 | **Fill rule** | Skip the trade if you can't fill within ~2% of the estimated debit |
 | **Confidence** | 40 base, +30 if 21-day/weekly/monthly trends are all up, +30 if 20-day realized vol < 15%. HIGH = 100 |
 
@@ -41,10 +43,18 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
 
 | Period | Trades | Win | Avg return on risk | CAGR | Max DD | Sharpe |
 |---|---|---|---|---|---|---|
-| 2011-2019 (rules chosen here) | 212 | 64% | +6.3% | +7.3% | −18.5% | 0.72 |
-| 2020-2026 (held out) | 144 | 60% | +4.5% | +4.5% | −13.2% | 0.52 |
-| **1991-2009 S&P 500 (never used in design)** | 164 | 62% | +5.8% | +2.5% | −8.3% | 0.49 |
+| 2011-2019 (rules chosen here) | 209 | 66% | +4.8% | +6.5% | −16.2% | 0.67 |
+| 2020-2026 (held out) | 143 | 61% | +4.0% | +4.9% | −11.2% | 0.57 |
 | *SPY buy & hold, 2011-2026* | | | | +14.1% | −33.7% | 0.86 |
+
+| 2000-2026, same signal | CAGR | Max DD | Sharpe | Worst year |
+|---|---|---|---|---|
+| Options (calls) on SPY/QQQ/IWM | +4.9% | −19.9% | 0.52 | −11.8% |
+| **Shares** on SPY/QQQ/IWM | +3.9% | **−11.8%** | **0.66** | **−7.5%** |
+| SPY buy & hold | +8.3% | −55.2% | 0.51 | −36.8% |
+
+The strategy is invested only ~14% of the time, so keep idle cash in
+T-bills (not credited above).
 
 ### Is it real? (bias audit: `scripts/research_bias_checks.py`)
 
@@ -61,6 +71,19 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
   available via `structure_kind: call_debit_spread`.
 - **Expect a few percent a year**, with roughly one losing year in five.
   Paper trade first and compare your real fills to the scanner's estimates.
+
+### Robustness round (`scripts/research_robustness.py`)
+
+- **The structure was chosen by worst case**, picked on 2011-2019 under
+  pricing stress: 0.80Δ call, hold ≤10. It held up better than the previous
+  0.70Δ default in both held-out windows when paying +10% IV, and cut the
+  number of −75% trades from 25 to 6.
+- **13 never-used ETFs** (DIA, MDY, IJR, RSP, sector SPDRs, EFA, EEM) show
+  the same timing edge on the underlying (t = 4-5, placebo p < 0.0002). But
+  their wider option spreads turn it into a loss, so the options universe
+  stays SPY/QQQ/IWM.
+- **Shares on the core 3 ETFs** had the best risk-adjusted returns and were
+  positive in every era (`scripts/research_shares_vs_options.py`).
 
 ### What the research found
 
@@ -88,6 +111,8 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
 | `python scripts/research_filters.py` | All 16 combinations of the confirmation filters |
 | `python scripts/research_mcmc_audit.py` | Walk-forward skill of the MCMC models |
 | `python scripts/research_bias_checks.py` | Untouched 1991-2009 test, placebo, no-options, pricing stress, deflated Sharpe |
+| `python scripts/research_robustness.py` | Pre-registered worst-case structure choice; validation on 13 fresh ETFs |
+| `python scripts/research_shares_vs_options.py` | Shares vs options vs hybrid portfolios, 2000-2026 |
 | `python scripts/get_signals.py` / `run_backtest.py` | Legacy stock signals / stock backtest |
 
 `options_now.py`, `options_signal_v4.py` and `backtest_options_v4.py` are
@@ -100,7 +125,8 @@ premium, no skew, no costs) overstated results.
 backtesting/
   market_data.py        # GitHub-mirror + yfinance loader, VIX, split handling
   options_pricing.py    # Black-Scholes, VIX-based IV model, skew, cost model
-  options_backtest.py   # Portfolio options backtester (daily MTM) + Monte Carlo
+  options_backtest.py   # Portfolio options backtester (daily MTM), per-trade simulator, Monte Carlo
+  shares_backtest.py    # Same signal traded in ETF shares
   engine.py, metrics.py # Stock backtesting engine
 trading/
   options_swing.py      # Strategy rules, confidence score, trade tickets
