@@ -182,3 +182,46 @@ def test_shares_backtester_slots_and_signal_exit():
         assert ((tf.entry_date <= d) & (tf.exit_date > d)).sum() <= 2
     assert (tf[tf.exit_reason == "signal"].days_held >= 3).all()
     assert res.equity.iloc[-1] == pytest.approx(100_000)
+
+
+# ----------------------------------------------------------------------
+# cash yield and excess-return Sharpe
+# ----------------------------------------------------------------------
+
+def test_daily_risk_free_calendar_accrual():
+    from backtesting.options_pricing import daily_risk_free
+
+    idx = pd.to_datetime(["2023-03-03", "2023-03-06", "2023-03-07"])  # Fri, Mon, Tue
+    rf = daily_risk_free(idx)
+    assert rf.iloc[0] == 0.0
+    assert rf.iloc[1] == pytest.approx(0.052 * 3 / 365)
+    assert rf.iloc[2] == pytest.approx(0.052 * 1 / 365)
+
+
+def test_idle_cash_earns_tbill_rate():
+    from backtesting.shares_backtest import SharesSwingBacktester
+
+    idx = pd.bdate_range("2023-01-02", "2023-12-29")
+    close = pd.Series(100.0, index=idx)
+    never = pd.Series(False, index=idx)
+    res = SharesSwingBacktester(ExitRules(), cash_yield=True).run(
+        {"X": close}, {"X": never}, {"X": never})
+    growth = res.equity.iloc[-1] / res.equity.iloc[0] - 1
+    days = (idx[-1] - idx[0]).days
+    assert growth == pytest.approx((1 + 0.052 * 1 / 365) ** days - 1, rel=0.02)
+    st = res.stats()
+    # all-cash: positive raw Sharpe but ~zero excess Sharpe
+    assert abs(st["sharpe_excess"]) < 0.05
+
+
+def test_options_backtester_cash_yield_toggle():
+    close, iv, ex = _path(n=200)
+    entries = pd.Series(False, index=close.index)
+    entries.iloc[::40] = True
+    f = pd.DataFrame({"close": close})
+    on = OptionsSwingBacktester(SPEC, EXITS, cash_yield=True).run(
+        {"SPY": f}, {"SPY": iv}, {"SPY": entries}, {"SPY": ex})
+    off = OptionsSwingBacktester(SPEC, EXITS).run(
+        {"SPY": f}, {"SPY": iv}, {"SPY": entries}, {"SPY": ex})
+    assert on.equity.iloc[-1] > off.equity.iloc[-1]
+    assert len(on.trades) == len(off.trades)

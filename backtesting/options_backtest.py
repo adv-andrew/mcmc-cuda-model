@@ -27,6 +27,7 @@ from backtesting.options_pricing import (
     SkewModel,
     close_value,
     open_position,
+    daily_risk_free,
     position_return,
     profit_fraction,
     risk_free_rate,
@@ -131,12 +132,17 @@ def summarize(tf: pd.DataFrame, eq: pd.Series) -> dict:
         years = (eq.index[-1] - eq.index[0]).days / 365.25
         total = eq.iloc[-1] / eq.iloc[0] - 1.0
         daily = eq.pct_change().dropna()
+        excess = daily - daily_risk_free(eq.index).reindex(daily.index)
         dd = eq / eq.cummax() - 1.0
+        sd = daily.std()
         out.update(
             total_return=float(total),
             cagr=float((1 + total) ** (1 / years) - 1) if years > 0 and total > -1 else -1.0,
             max_drawdown=float(dd.min()),
-            sharpe=float(daily.mean() / daily.std() * np.sqrt(252)) if daily.std() > 0 else 0.0,
+            sharpe=float(daily.mean() / sd * np.sqrt(252)) if sd > 0 else 0.0,
+            # Sharpe on returns above T-bills: the right measure once idle
+            # cash earns interest (otherwise the cash yield inflates Sharpe).
+            sharpe_excess=float(excess.mean() / sd * np.sqrt(252)) if sd > 0 else 0.0,
         )
     return out
 
@@ -220,10 +226,12 @@ class OptionsSwingBacktester:
         cost_multiplier: float = 1.0,
         etfs: tuple = ("SPY", "QQQ", "IWM", "DIA"),
         tight_cost_symbols: Optional[tuple] = None,
+        cash_yield: bool = False,
     ) -> None:
         """``etfs`` get the $1 ETF strike grid. ``tight_cost_symbols`` (default:
         same as ``etfs``) get the tight ETF bid/ask tier; everything else pays
-        the wider stock tier."""
+        the wider stock tier. ``cash_yield`` accrues T-bill interest on cash
+        not committed to option premium."""
         self.structure = structure
         self.exits = exits
         self.risk_per_trade = risk_per_trade
@@ -233,6 +241,7 @@ class OptionsSwingBacktester:
         self.cost_multiplier = cost_multiplier
         self.etfs = set(etfs)
         self.tight = set(etfs if tight_cost_symbols is None else tight_cost_symbols)
+        self.cash_yield = cash_yield
 
     def _costs(self, symbol: str, price_scale: float = 1.0) -> CostModel:
         """Costs in the (possibly split-adjusted) price units of the backtest."""
@@ -298,8 +307,10 @@ class OptionsSwingBacktester:
         open_pos: List[_Open] = []
         trades: List[Trade] = []
         equity = np.empty(len(dates))
+        rf = daily_risk_free(dates).to_numpy() if self.cash_yield else np.zeros(len(dates))
 
         for i, date in enumerate(dates):
+            cash *= 1.0 + rf[i]
             # ---- 1. manage open positions --------------------------------
             still_open: List[_Open] = []
             for op in open_pos:

@@ -38,9 +38,13 @@ def _ncdf(x: float) -> float:
 TRADING_DAYS = 252
 CALENDAR_DAYS = 365.0
 
-# Approximate 1-3 month T-bill yields by year; option values over a few days
-# are barely sensitive to this, but it keeps carry roughly right.
+# Approximate annual-average 3-month T-bill yields. Option values over a few
+# days are barely sensitive to this; it matters more for interest on idle cash.
 _RATE_BY_YEAR = {
+    1990: 0.075, 1991: 0.054, 1992: 0.034, 1993: 0.030, 1994: 0.043,
+    1995: 0.055, 1996: 0.050, 1997: 0.051, 1998: 0.048, 1999: 0.046,
+    2000: 0.058, 2001: 0.034, 2002: 0.016, 2003: 0.010, 2004: 0.014,
+    2005: 0.032, 2006: 0.047, 2007: 0.044, 2008: 0.014, 2009: 0.002,
     2010: 0.001, 2011: 0.001, 2012: 0.001, 2013: 0.001, 2014: 0.001,
     2015: 0.002, 2016: 0.004, 2017: 0.010, 2018: 0.019, 2019: 0.021,
     2020: 0.004, 2021: 0.001, 2022: 0.020, 2023: 0.052, 2024: 0.051,
@@ -51,6 +55,15 @@ _RATE_BY_YEAR = {
 def risk_free_rate(date: pd.Timestamp) -> float:
     """Approximate short-term risk-free rate for ``date``."""
     return _RATE_BY_YEAR.get(pd.Timestamp(date).year, 0.03)
+
+
+def daily_risk_free(index: pd.DatetimeIndex) -> pd.Series:
+    """Risk-free return earned between consecutive dates of ``index``
+    (calendar-day accrual, so a weekend earns three days)."""
+    idx = pd.DatetimeIndex(index)
+    days = pd.Series(idx, index=idx).diff().dt.days.fillna(0).to_numpy()
+    rates = np.array([_RATE_BY_YEAR.get(d.year, 0.03) for d in idx])
+    return pd.Series(rates * days / 365.0, index=idx)
 
 
 # ----------------------------------------------------------------------

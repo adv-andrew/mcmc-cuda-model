@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from backtesting.options_backtest import BacktestResult, ExitRules, Trade
+from backtesting.options_pricing import daily_risk_free
 
 
 @dataclass
@@ -39,12 +40,14 @@ class SharesSwingBacktester:
         max_concurrent: int = 4,
         cost_bps: float = 3.0,
         initial_equity: float = 100_000.0,
+        cash_yield: bool = False,
     ) -> None:
         self.exits = exits
         self.position_frac = position_frac
         self.max_concurrent = max_concurrent
         self.cost = cost_bps / 10_000.0
         self.initial_equity = initial_equity
+        self.cash_yield = cash_yield
 
     def run(
         self,
@@ -73,7 +76,9 @@ class SharesSwingBacktester:
         positions: List[_Pos] = []
         trades: List[Trade] = []
         equity = np.empty(len(dates))
+        rf = daily_risk_free(dates).to_numpy() if self.cash_yield else np.zeros(len(dates))
         for i, date in enumerate(dates):
+            cash *= 1.0 + rf[i]
             keep = []
             for p in positions:
                 held = i - p.entry_i
