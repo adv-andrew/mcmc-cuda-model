@@ -589,7 +589,65 @@ previews the rule using today's close.
 
 ---
 
-## 8. How to trade it
+## 8. Confirmed on real option quotes
+
+Every result above used *modelled* option prices. `scripts/research_real_quotes.py`
+re-prices the trades portfolio mode actually made from 2008 to 2025 with
+**real end-of-day bids and asks** for SPY, QQQ and IWM: 4,514 trading days and
+about 25 million SPY quotes, from the
+[lambdaclass/options_backtester](https://github.com/lambdaclass/options_backtester)
+`data-v1` release, SHA-256 verified. The protocol and verdict rule were fixed
+before any real price was examined.
+
+For each trade, the contract is the call nearest 0.80Δ at the first expiry
+at least 30 days out, using the real chain's quoted deltas. It is bought and
+sold on the model's entry and exit days, with $0.65 per contract per side.
+
+| Same 347 trades (17 had no quotes that day) | Win | Avg return / trade | t |
+|---|---|---|---|
+| Model (Black-Scholes, IV from VIX) | 63% | +4.15% | 3.33 |
+| Real quotes, optimistic fills (mid) | 67% | +5.27% | 3.94 |
+| **Real quotes, realistic fills** (limit 25% into the spread) | **65%** | **+4.11%** | **3.10** |
+| Real quotes, pessimistic fills (pay ask, sell bid) | 63% | +2.98% | 2.26 |
+
+- **Model and reality agree trade by trade** (correlation 0.97). Real
+  contracts cost about 3.8% *less* than the model priced them (median), so
+  the model was slightly conservative. The real median bid/ask spread was
+  1.8% of mid, close to the 1% half-spread assumed.
+- **By period (realistic fills):** 2008-2010 −1.4% (23 trades), 2011-2019
+  +4.4% (204), 2020-2025 +4.6% (120).
+- **Worst trades** were the known shocks: Oct 2018 −93%, Aug 2011 −88%,
+  Feb 2018 −86%. This is why each position is capped at 6% of the account.
+
+**Portfolio mode, 2008-2025, with real-quote option P&L:**
+
+| | CAGR | Max DD | Sharpe (excess) | Worst year |
+|---|---|---|---|---|
+| Core only (no options) | +8.2% | −21.9% | 0.67 | −16.7% |
+| With model option prices | +12.8% | −27.2% | 0.69 | −21.5% |
+| **With real quotes, realistic fills** | **+12.9%** | −30.1% | 0.68 | −21.3% |
+| With real quotes, pessimistic fills | +12.3% | −34.2% | 0.62 | −23.2% |
+| SPY buy & hold | +11.0% | −51.9% | 0.56 | −36.2% |
+
+**Pre-registered verdict: confirmed.** Realistic-fill returns are positive
+(t = 3.1), and the options add about 4.7 points a year over the core alone.
+The real-quote drawdown is deeper than the model's (−30% vs −27%). The
+portfolio figures swap each trade's P&L without re-deriving later position
+sizes, a small approximation.
+
+To reproduce (about 1.3 GB, saved to the git-ignored `data/cache/options/`):
+
+```bash
+mkdir -p data/cache/options && cd data/cache/options
+for s in SPY QQQ IWM; do for f in options underlying; do
+  curl -LO "https://github.com/lambdaclass/options_backtester/releases/download/data-v1/${s}_${f}.parquet"
+done; done
+cd - && python scripts/research_real_quotes.py
+```
+
+---
+
+## 9. How to trade it
 
 ```bash
 python scripts/options_swing_signals.py        # today's signals + order tickets
@@ -620,11 +678,11 @@ python scripts/paper_trade.py update           # paper-trade portfolio mode (sam
    ticket** (about 1/3 of the account per ETF, same exits) instead of the
    call, and keep idle cash in T-bills.
 
-## 9. Limitations
+## 10. Limitations
 
 - **Close-only data.** Intraday paths, stops, and gaps aren't modeled, and the
   1-day-late test is the proxy for execution slippage.
-- **Modeled option prices.** IV comes from VIX, not historical option chains,
+- **Modeled option prices** (except section 8). IV comes from VIX, not historical option chains,
   and the VIX mirror can lag a few days. The bias audit shows the result
   depends on entry IV being close to the model's estimate, which only real
   quotes can settle. Paper trading and recording your actual fills against

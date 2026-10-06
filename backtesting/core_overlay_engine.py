@@ -169,7 +169,8 @@ class CoreOverlayEngine:
                     "id": p["id"], "symbol": s, "entry_date": p["entry_date"],
                     "exit_date": str(date.date()), "days_held": held,
                     "entry_spot": p["entry_spot"], "exit_spot": float(px),
-                    "model_debit": p["model_debit"], "ret_on_risk": float(r),
+                    "model_debit": p["model_debit"], "risk": float(p["risk"]),
+                    "ret_on_risk": float(r),
                     "pnl": float(p["risk"] * r), "exit_reason": reason,
                     "actual_debit": p.get("actual_debit"),
                 })

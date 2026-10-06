@@ -16,6 +16,12 @@ was the most reliable variant tested.
 | same, with harsh option pricing | +10.7% | −29% | 0.54 |
 | SPY buy & hold | +10.4% | −55% | 0.49 |
 
+**Checked against real option quotes:** the strategy's 2008-2025 trades,
+re-priced with real historical bids and asks, made **+4.1% per trade (t = 3.1)
+with realistic fills**, matching the model's +4.15%. Portfolio mode with
+real option P&L returned **12.9% a year vs 11.0% for SPY** over 2008-2025
+(section 8 of the write-up).
+
 Hold 85% of the account in SPY while SPY's month-end close is above its
 10-month average (otherwise T-bills), and buy the dip calls below with 6% of
 the account each. Returns were 13-14% in each era: 1996-2010, 2011-2019 and
@@ -147,6 +153,7 @@ T-bills (not credited above).
 | `python scripts/research_robustness.py` | Pre-registered worst-case structure choice; validation on 13 fresh ETFs |
 | `python scripts/research_shares_vs_options.py` | Shares vs options vs hybrid portfolios, 2000-2026 |
 | `python scripts/research_core_overlay.py` | Portfolio mode: trend core + options overlay, single-account validation |
+| `python scripts/research_real_quotes.py` | **Re-price the strategy's trades on real historical option bids/asks** (needs the 1.3 GB quote archive) |
 | `python scripts/research_exits.py` | Pre-registered exit study (winner failed validation; no change) |
 | `python scripts/get_signals.py` / `run_backtest.py` | Legacy stock signals / stock backtest |
 
