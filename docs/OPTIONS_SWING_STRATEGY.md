@@ -498,6 +498,21 @@ A replay from 2 January 2025 to 5 October 2026 made 40 option trades: 68% won,
 averaging +3.6% per trade, and the account rose 23.5% with a −15.9% max
 drawdown through the April 2025 tariff shock.
 
+### Treasuries instead of T-bills when the core is out (`scripts/research_risk_off.py`)
+
+This was a single pre-registered test: adopt IEF (7-10 year Treasuries) as
+the risk-off asset only if it beat T-bills on excess Sharpe in all three
+eras.
+
+| Core + options | Sharpe 2003-10 | 2011-19 | 2020-26 | Worst year 2020-26 | CAGR 2003-26 |
+|---|---|---|---|---|---|
+| T-bills when out (kept) | 0.65 | 0.71 | **0.65** | **−22.6%** | +12.9% |
+| IEF when out | **0.76** | **0.76** | 0.64 | −28.4% | +14.0% |
+
+IEF helped through 2019 (bonds rallied in 2008) but failed in 2022, when
+stocks and bonds fell together. It doesn't pass, so T-bills stay. It's a
+reasonable alternative if you expect bonds to hedge stocks again.
+
 **How to run it:** the scanner prints the core instruction at the top.
 Re-check it at the last close of each month; the "month-end re-check" line
 previews the rule using today's close.
