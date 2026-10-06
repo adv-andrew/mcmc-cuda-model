@@ -26,16 +26,32 @@ write-up and `scripts/research_core_overlay.py`.
 
 ```bash
 pip install -r requirements.txt
-
-# Today's signals (run ~15 min before the close)
-python scripts/options_swing_signals.py
-
-# Full backtest with in/out-of-sample split, stress tests, Monte Carlo sizing
-python scripts/backtest_options_swing.py
+python scripts/options_swing_signals.py --account 75000   # use your account size
 ```
 
-Data comes from public GitHub mirrors (daily SPY/QQQ/IWM/AAPL/NVDA + CBOE VIX)
-and falls back to yfinance, so it also works where Yahoo is blocked.
+### Your routine
+
+| When | What |
+|---|---|
+| **Each trading day, ~3:45 pm ET** | Run the scanner. For each `ENTRY`, buy the call it lists with a limit order, and **skip it if you can't fill within ~2% of the estimated debit**. For each position you hold 3+ days, sell at the close if `exit signal = YES`; always sell by day 10. Add `--vix 16.4` (today's VIX) if it says VIX data is stale |
+| **Last trading day of each month** | Check the `PORTFOLIO CORE` line. If `IN`, hold ~85% of the account in SPY (the scanner prints the share count); if `OUT`, keep that money in T-bills or a money-market fund |
+| **After the close (optional, recommended for the first months)** | `python scripts/paper_trade.py update`, then `python scripts/paper_trade.py fill <id> <price>` with what you could really have paid. The report tells you whether your real fills stay inside the ~2% the edge can absorb |
+
+Keep cash that isn't in SPY or in an option in T-bills or a money-market
+fund. The backtests assume it earns the T-bill rate.
+
+### Research and validation
+
+```bash
+python scripts/backtest_options_swing.py       # options leg: IS/OOS, stress tests, Monte Carlo
+python scripts/research_core_overlay.py        # portfolio mode, single-account validation
+python scripts/research_bias_checks.py         # untouched 1991-2009 data, placebo, pricing stress
+python -m pytest -q                            # 280+ tests, incl. ledger == backtest equivalence
+```
+
+Data comes from public GitHub mirrors (SPY/QQQ/IWM and more ETFs since the
+1990s, CBOE VIX). It falls back to yfinance and tops up stale mirror data
+from it, so it also works where Yahoo is blocked.
 
 ---
 
@@ -43,7 +59,8 @@ and falls back to yfinance, so it also works where Yahoo is blocked.
 
 | | Rule |
 |---|---|
-| **Universe** | SPY, QQQ, IWM |
+| **Core** (portfolio mode) | 85% in SPY while SPY's month-end close > 10-month SMA, else T-bills; rebalance monthly |
+| **Universe** (dip overlay) | SPY, QQQ, IWM |
 | **Setup** | Close > 200-day SMA **and** ≥ 1.5 ATR below the 5-day high |
 | **Trigger** (any) | RSI(2) < 10 · IBS < 0.25 with RSI(2) < 15 · close < lower Bollinger(20, 2) · pullback ≥ 2 ATR |
 | **Position** | Buy one ~0.80Δ (in-the-money) call, nearest Friday ≥ 30 days out |
