@@ -270,3 +270,27 @@ def test_blend_weights():
     assert eq.iloc[-1] == pytest.approx(100_000)
     with pytest.raises(ValueError):
         blend({"a": a, "b": b}, {"a": 0.7, "b": 0.7})
+
+
+def test_top_up_appends_and_rescales():
+    base = pd.DataFrame({c: [100.0, 101.0] for c in md.COLUMNS},
+                        index=pd.to_datetime(["2026-09-21", "2026-09-22"]))
+    newer = pd.DataFrame({c: [202.0, 204.0, 206.0] for c in md.COLUMNS},
+                         index=pd.to_datetime(["2026-09-22", "2026-09-23", "2026-09-24"]))
+    out = md.top_up(base, newer)
+    assert len(out) == 4 and out.index.is_monotonic_increasing
+    # overlap 2026-09-22: 101 vs 202 -> newer rows scaled by 0.5
+    assert out.Close.iloc[-1] == pytest.approx(103.0)
+    assert md.top_up(base, newer.iloc[:1]).equals(base)
+
+
+def test_stale_mirror_gets_yfinance_top_up(tmp_path):
+    stale = pd.DataFrame({c: [100.0] for c in md.COLUMNS},
+                         index=[pd.Timestamp.now().normalize() - pd.Timedelta(days=20)])
+    fresh = pd.DataFrame({c: [100.0, 105.0] for c in md.COLUMNS},
+                         index=[stale.index[0], pd.Timestamp.now().normalize()])
+    with patch.object(md, "_http_get", return_value=b""), \
+         patch.object(md, "_normalise_vix", return_value=stale), \
+         patch.object(md, "_fetch_yfinance", return_value=fresh):
+        df = md.load_daily("VIX", cache_dir=tmp_path, refresh=True)
+    assert len(df) == 2 and df.Close.iloc[-1] == 105.0

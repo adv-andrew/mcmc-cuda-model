@@ -26,6 +26,8 @@ from trading.options_swing import SwingConfig, contracts_for, core_status, scan
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="print machine-readable output")
+    ap.add_argument("--vix", type=float, default=None,
+                    help="today's VIX close, if the data source is stale (e.g. 16.4)")
     ap.add_argument("--account", type=float, default=None,
                     help="account size in $: prints whole contracts / shares to trade")
     args = ap.parse_args()
@@ -33,6 +35,12 @@ def main() -> None:
     cfg = SwingConfig.from_yaml()
     syms = list(cfg.symbols)
     data = load_universe(syms + ["SPY", "VIX"], refresh=True)
+    last_px = max(data[s].index[-1] for s in syms)
+    if args.vix is not None:  # manual override for today's VIX
+        vix = data["VIX"]
+        row = pd.DataFrame({c: [args.vix] for c in ("Open", "High", "Low", "Close", "AdjClose")},
+                           index=[last_px]).assign(Volume=0.0)
+        data["VIX"] = pd.concat([vix[vix.index < last_px], row]).sort_index()
     feats = {s: build_features(data[s], data["VIX"]) for s in syms}
     ivs = {s: atm_iv_series(data[s], data["VIX"], data["SPY"]) for s in syms}
     result = scan(feats, ivs, cfg)
@@ -55,7 +63,12 @@ def main() -> None:
     print(f"OPTIONS SWING SIGNALS  -  buy the dip in an uptrend ({cfg.structure_kind})")
     print("=" * 72)
     print(f"Data through {last.date()}  |  VIX data through {vix_last.date()}"
-          + ("  (stale: IV estimated from realized vol)" if (last - vix_last).days > 3 else ""))
+          + ("  (stale: IV estimated from realized vol; pass --vix <today's VIX>)"
+             if (last - vix_last).days > 3 else ""))
+    age = (pd.Timestamp.now().normalize() - last).days
+    if age > 4:
+        print(f"WARNING: price data is {age} days old - signals may be out of date. "
+              "Check your connection or run where Yahoo Finance is reachable.")
 
     if core:
         state = (f"IN - hold {core['core_weight']:.0%} of the account in {core['symbol']}"

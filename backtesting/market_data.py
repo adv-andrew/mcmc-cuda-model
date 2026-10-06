@@ -30,6 +30,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ RELEASE_PARQUET_URL = (
     "https://github.com/Johnbrick123/sp500-data/releases/download/data/prices.parquet"
 )
 RELEASE_TTL_HOURS = 24
+STALE_AFTER_DAYS = 4  # calendar days; older mirror data gets a yfinance top-up
 
 DEFAULT_CACHE_DIR = Path("data/cache/daily")
 CACHE_TTL_HOURS = 12
@@ -139,7 +141,10 @@ def load_daily(
     """Load full daily OHLCV history for ``symbol`` (``"VIX"`` or ``"^VIX"`` for VIX).
 
     Order of preference: fresh local cache -> GitHub mirror -> yfinance ->
-    stale local cache. Raises ``RuntimeError`` if nothing is available.
+    stale local cache. If the mirror's last bar is more than
+    ``STALE_AFTER_DAYS`` old (the VIX mirror can lag ~2 weeks), newer bars
+    from yfinance are appended when it is reachable. Raises ``RuntimeError``
+    if nothing is available.
     """
     symbol = symbol.upper().lstrip("^")
     cache_dir = Path(cache_dir)
@@ -164,9 +169,15 @@ def load_daily(
         if table is not None:
             df = _normalise_release(table, symbol)
 
-    if df is None or df.empty:
+    stale = (df is not None and not df.empty
+             and (pd.Timestamp.now().normalize() - df.index[-1]).days > STALE_AFTER_DAYS)
+    if df is None or df.empty or stale:
         try:
-            df = _fetch_yfinance(("^" + symbol) if symbol == "VIX" else symbol)
+            yf_df = _fetch_yfinance(("^" + symbol) if symbol == "VIX" else symbol)
+            if df is None or df.empty:
+                df = yf_df
+            elif not yf_df.empty:
+                df = top_up(df, yf_df)
         except Exception as exc:
             logger.warning("yfinance failed for %s: %s", symbol, exc)
 
@@ -214,6 +225,26 @@ def split_factor(index: pd.DatetimeIndex, symbol: str) -> pd.Series:
 def traded_close(df: pd.DataFrame, symbol: str) -> pd.Series:
     """Close as it actually printed on the day (split-unadjusted)."""
     return df["Close"] * split_factor(df.index, symbol)
+
+
+def top_up(base: pd.DataFrame, newer: pd.DataFrame) -> pd.DataFrame:
+    """Append rows of ``newer`` dated after ``base``'s last row.
+
+    The appended prices are rescaled so the overlapping day matches, which
+    keeps returns continuous even if the two sources adjust differently.
+    """
+    extra = newer[newer.index > base.index[-1]]
+    if extra.empty:
+        return base
+    overlap = newer.index.intersection(base.index)
+    if len(overlap):
+        d = overlap[-1]
+        ratio = base.loc[d, "Close"] / newer.loc[d, "Close"]
+        if np.isfinite(ratio) and ratio > 0:
+            extra = extra.copy()
+            for c in ("Open", "High", "Low", "Close", "AdjClose"):
+                extra[c] = extra[c] * ratio
+    return pd.concat([base, extra[COLUMNS]]).sort_index()
 
 
 def load_long_history(
