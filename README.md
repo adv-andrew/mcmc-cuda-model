@@ -118,7 +118,8 @@ T-bills (not credited above).
 
 | Command | Description |
 |---|---|
-| `python scripts/options_swing_signals.py` | **Today's signals** with order tickets and exit status |
+| `python scripts/options_swing_signals.py` | **Today's signals**: core instruction, order tickets, exit status |
+| `python scripts/paper_trade.py update` / `report` / `fill ID PRICE` | **Paper-trade** portfolio mode with the backtest engine; tracks real fills vs model |
 | `python scripts/backtest_options_swing.py` | Backtest, per-year/tier tables, stress tests, Monte Carlo sizing |
 | `python scripts/research_strategy_lab.py` | Event study: 34 setups × 1/2/3/5/10-day holds, IS vs OOS |
 | `python scripts/research_options_structures.py [--stocks]` | Long calls vs debit spreads vs credit spreads |
@@ -144,9 +145,11 @@ backtesting/
   options_backtest.py   # Portfolio options backtester (daily MTM), per-trade simulator, Monte Carlo
   shares_backtest.py    # Same signal traded in ETF shares
   portfolio.py          # Trend core (Faber), sleeve blending, single-account simulator
+  core_overlay_engine.py # Step engine shared by the backtest and the paper ledger
   engine.py, metrics.py # Stock backtesting engine
 trading/
-  options_swing.py      # Strategy rules, confidence score, trade tickets
+  options_swing.py      # Strategy rules, confidence score, trade tickets, core status
+  paper_ledger.py       # Paper-trading ledger (JSON state, fill tracking)
   features.py           # Indicators incl. weekly/monthly (no-lookahead) features
   swing_signals.py      # Catalog of 34 trader setups used by the strategy lab
   regime_mcmc.py        # Regime-switching Markov-chain Monte Carlo (research)

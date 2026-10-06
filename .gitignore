@@ -24,3 +24,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Personal paper-trading ledgers
+data/paper/

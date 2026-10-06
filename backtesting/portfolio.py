@@ -101,18 +101,8 @@ def simulate_core_overlay(
 
     Returns ``(equity, trades)`` where trades is a DataFrame.
     """
-    from backtesting.options_backtest import build_legs
-    from backtesting.options_pricing import (
-        CostModel,
-        SkewModel,
-        close_value,
-        open_position,
-        position_return,
-        profit_fraction,
-        risk_free_rate,
-    )
+    from backtesting.core_overlay_engine import CoreOverlayEngine, EngineState
 
-    skew = skew or SkewModel()
     symbols = list(features)
     dates = pd.DatetimeIndex(core_px.dropna().index)
     if start:
@@ -122,7 +112,6 @@ def simulate_core_overlay(
     cpx = core_px.reindex(dates).ffill().to_numpy(float)
     csig = core_signal.reindex(dates).fillna(False).astype(bool).shift(
         1, fill_value=False).to_numpy()
-    rf = daily_risk_free(dates).to_numpy()
     close = {s: features[s]["close"].reindex(dates).to_numpy(float) for s in symbols}
     iv = {s: atm_iv[s].reindex(dates).ffill().to_numpy(float) for s in symbols}
     ent = {s: entries[s].reindex(dates).fillna(False).to_numpy(bool) for s in symbols}
@@ -133,70 +122,16 @@ def simulate_core_overlay(
                  if price_scale and s in price_scale else np.ones(len(dates)))
              for s in symbols}
 
-    def costs(s, i):
-        c = CostModel.etf().scaled(cost_mult)
-        return CostModel(c.min_half_spread / scale[s][i], c.pct_half_spread,
-                         c.commission_per_contract / scale[s][i])
-
-    cash, core_units = initial, 0.0
-    open_pos, trades = [], []
-    equity = np.empty(len(dates))
+    engine = CoreOverlayEngine(structure, exits, core_weight, risk_per_trade, max_concurrent,
+                               switch_cost_bps, skew, cost_mult)
+    state = EngineState(cash=initial)
+    last_i = len(dates) - 1
     for i, date in enumerate(dates):
-        cash *= 1.0 + rf[i]
-        # --- option exits (value positions first) ---
-        still, opt_value = [], 0.0
-        for p in open_pos:
-            s = p["symbol"]
-            if np.isnan(close[s][i]):
-                still.append(p)
-                opt_value += p["risk"]
-                continue
-            v = close_value(p["pos"], close[s][i], date, iv[s][i], skew, costs(s, i))
-            r = position_return(p["pos"], v)
-            held = i - p["i"]
-            done = ((p["pos"].expiry - date).days <= 0
-                    or (exits.profit_target is not None
-                        and profit_fraction(p["pos"], v) >= exits.profit_target)
-                    or (exits.signal_exit and held >= exits.min_hold and ext[s][i])
-                    or held >= exits.max_hold)
-            if done:
-                cash += p["risk"] * (1 + r)
-                trades.append({"symbol": s, "entry_date": p["date"], "exit_date": date,
-                               "days_held": held, "ret_on_risk": r,
-                               "pnl": p["risk"] * r})
-            else:
-                still.append(p)
-                opt_value += p["risk"] * (1 + r)
-        open_pos = still
-        total = cash + core_units * cpx[i] + opt_value
-        # --- core rebalance: month start or signal flip ---
-        month_start = i == 0 or dates[i].month != dates[i - 1].month
-        flip = i > 0 and csig[i] != csig[i - 1]
-        if month_start or flip:
-            target_units = (core_weight * total / cpx[i]) if csig[i] else 0.0
-            trade_val = (target_units - core_units) * cpx[i]
-            cash -= trade_val + abs(trade_val) * switch_cost_bps / 10_000.0
-            core_units = target_units
-        total = cash + core_units * cpx[i] + opt_value
-        equity[i] = total
-        # --- option entries ---
-        if i >= len(dates) - 1:
-            continue
-        held_syms = {p["symbol"] for p in open_pos}
-        cands = [s for s in symbols if ent[s][i] and s not in held_syms
-                 and not np.isnan(close[s][i]) and not np.isnan(iv[s][i])]
-        if prio:
-            cands.sort(key=lambda s: prio[s][i], reverse=True)
-        for s in cands:
-            if len(open_pos) >= max_concurrent:
-                break
-            risk = risk_per_trade * total
-            if risk > cash:
-                break
-            spot = close[s][i]
-            legs = build_legs(structure, 1, spot, structure.dte / 365.0, iv[s][i],
-                              risk_free_rate(date), skew, True, scale[s][i])
-            pos = open_position(legs, spot, date, structure.dte, iv[s][i], skew, costs(s, i))
-            cash -= risk
-            open_pos.append({"symbol": s, "pos": pos, "i": i, "date": date, "risk": risk})
-    return pd.Series(equity, index=dates, name="equity"), pd.DataFrame(trades)
+        engine.step(
+            state, date, cpx[i], bool(csig[i]),
+            {s: close[s][i] for s in symbols}, {s: iv[s][i] for s in symbols},
+            {s: bool(ent[s][i]) for s in symbols}, {s: bool(ext[s][i]) for s in symbols},
+            {s: prio[s][i] for s in symbols} if prio else None,
+            {s: scale[s][i] for s in symbols}, allow_entries=i < last_i)
+    eq = pd.Series([v for _, v in state.equity], index=dates, name="equity")
+    return eq, pd.DataFrame(state.trades)

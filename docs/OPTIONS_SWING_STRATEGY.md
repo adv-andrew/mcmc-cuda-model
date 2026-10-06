@@ -448,6 +448,21 @@ distribution is ~70% of equity per trade (46% if the edge is 40% smaller).
 The default is about 1/10 Kelly, because concurrent trades and the core are
 correlated in crashes.
 
+### Paper trading with the backtest engine
+
+`scripts/paper_trade.py` keeps a ledger (`data/paper/ledger.json`, not
+committed) driven by the same `CoreOverlayEngine` as the single-account
+backtest. Tests confirm the ledger reproduces the backtest's equity curve
+exactly, even when it is stopped, saved and resumed. Run `update` after the
+close; missed days are replayed. Record what you could really pay for each
+option with `fill <id> <price>`. The report compares your real fills with
+the model's debit, the one number that decides whether this edge survives
+live trading (it can absorb about 2%).
+
+A replay from 2 January 2025 to 5 October 2026 made 40 option trades: 68% won,
+averaging +3.6% per trade, and the account rose 23.5% with a −15.9% max
+drawdown through the April 2025 tariff shock.
+
 **How to run it:** the scanner prints the core instruction at the top.
 Re-check it at the last close of each month; the "month-end re-check" line
 previews the rule using today's close.
@@ -464,6 +479,8 @@ python scripts/research_robustness.py          # worst-case structure choice, fr
 python scripts/research_shares_vs_options.py   # shares vs options vs hybrid, 2000-2026
 python scripts/research_core_overlay.py        # portfolio mode, single-account validation
 python scripts/research_exits.py               # pre-registered exit study (no change adopted)
+python scripts/research_sizing.py              # risk per trade vs return and drawdown
+python scripts/paper_trade.py update           # paper-trade portfolio mode (same engine)
 ```
 
 0. **Portfolio mode:** keep 85% of the account in SPY when the scanner says
