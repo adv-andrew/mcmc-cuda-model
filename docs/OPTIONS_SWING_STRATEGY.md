@@ -362,7 +362,24 @@ them. Adding 12 of them to the options portfolio at the same total risk
 lost money (2000-2026 Sharpe −0.26, max DD −66%). **The options universe
 stays SPY/QQQ/IWM.**
 
-### 6c. Vehicle: shares vs options, 2000-2026
+### 6c. Walk-forward re-selection (`scripts/research_walk_forward.py`)
+
+Each year from 2003 to 2026, the entry thresholds were re-chosen from 15
+combinations (pullback 1.0-2.0 ATR × RSI(2) cap 5/10/15) using only the
+previous 8 years, then traded for that year:
+
+| Out of sample, 2003-2026 | Trades | Win | Avg / trade | t |
+|---|---|---|---|---|
+| Re-picked yearly from past data | 252 | 64% | +4.5% | 2.8 |
+| Fixed 1.5 ATR / RSI(2) < 10 | 245 | 61% | +5.4% | 3.6 |
+
+The selection process itself is profitable out of sample, and the yearly
+picks stay in the 1.25-1.75 ATR band. The fixed choice ranked top-3 of 15
+in 12 of 23 years. Adaptive re-tuning did not beat the fixed thresholds
+(difference −2.0% per trade, t = −0.7), so they stay fixed, as
+pre-registered.
+
+### 6d. Vehicle: shares vs options, 2000-2026
 
 | Approach | CAGR | Max DD | Sharpe | Sharpe 00-10 / 11-19 / 20-26 | Worst year |
 |---|---|---|---|---|---|
