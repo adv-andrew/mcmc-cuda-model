@@ -529,6 +529,28 @@ It was better in the QQQ-led 2010s and 2020s but worse through the 2000-02
 tech crash: the hindsight pattern the every-era rule is there to catch. The
 SPY core stays.
 
+### Whipsaw-resistant core filter (`scripts/research_core_filter.py`)
+
+This was a single pre-registered test: go to T-bills only when SPY is below
+its 10-month SMA **and** its 12-month total return is below T-bills
+(absolute momentum). It had to win all three eras to be adopted.
+
+| Core + options | Sharpe 1996-10 | 2011-19 | 2020-26 | CAGR 1996-26 | Max DD | Signal changes |
+|---|---|---|---|---|---|---|
+| 10-month SMA (kept) | 0.64 | 0.72 | **0.65** | +13.5% | **−27.2%** | 44 |
+| SMA + 12-month momentum | **0.68** | **0.76** | 0.63 | **+14.8%** | −32.1% | 18 |
+
+This was a near miss. The dual filter trades less, earns about 1.3 points a
+year more, and softens 2022 (−18.5% vs −21.5%). But it exits later, so it
+rode the 2020 crash deeper, and its worst drawdown is 5 points larger. It
+failed one era, so the 10-month SMA stays. If you care more about CAGR than
+worst-case drawdown, it's the documented alternative.
+
+**Why the search stops here.** This round ran four pre-registered core and
+overlay variants (exits, risk-off asset, core universe, core filter). None
+passed every era. Each additional variant raises the chance that one
+passes by luck, which is the bias this project has worked to avoid.
+
 ### What to expect (`scripts/research_outcomes.py`)
 
 A block bootstrap of the 1996-2026 daily returns (10,000 paths, ~1-month
