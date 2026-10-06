@@ -8,6 +8,14 @@ recovers (min 3, max 10 trading days). Buying the ETF's shares instead,
 with the same entries and exits, was the most reliable version tested
 (section 6).
 
+**Recommended setup: portfolio mode (section 7).** Keep 85% of the account
+in SPY while SPY's month-end close is above its 10-month average (otherwise
+T-bills), and run the dip calls on top at 6% of the total account per trade.
+In a single-account backtest from 1996 to 2026 this returned **13.5% a year
+with a −27% max drawdown**, versus 10.4% and −55% for buying and holding SPY.
+Returns were about 13-14% in each era (1996-2010, 2011-2019, 2020-2026), and
+10.7% with harsh option pricing.
+
 **Bottom line after the bias audit (section 5):**
 - **The timing edge is real.** On untouched 1991-2009 S&P 500 data, the
   same entry/exit days returned +0.62% on the underlying with a 72% win rate
@@ -379,7 +387,52 @@ help without margin, because cash, not signals, is the binding constraint.
 
 ---
 
-## 7. How to trade it
+## 7. Portfolio mode: put the idle capital to work
+
+On its own, the dip strategy has money in the market only ~14% of the time.
+Its return per unit of risk is fine, but most of the account sits idle.
+Portfolio mode adds a **trend-following core** for that idle capital, using
+a published rule (Faber, 2007). Hold SPY while its last month-end close is
+above its 10-month SMA; otherwise hold T-bills. The rule was published in
+2007, so 2007-2026 is out of sample for it too.
+
+Single-account simulation (`scripts/research_core_overlay.py`): SPY shares
+rebalanced monthly and on signal changes, option premiums paid from cash and
+sized off total equity, T-bill interest on idle cash, 5 bps per core trade.
+
+| 1996-2026 | 1996-2010 | 2011-2019 | 2020-2026 | **CAGR** | Max DD | Sharpe (excess) | Worst year |
+|---|---|---|---|---|---|---|---|
+| **85% core + options (default)** | +13.5% | +13.1% | +13.8% | **+13.5%** | −27.2% | 0.67 | −21.5% |
+| Faber 8 / 12 months | | | | +13.3% / +13.7% | −27% | 0.67 / 0.68 | |
+| Core weight 80% | | | | +13.2% | −26.4% | 0.67 | |
+| Harsh option pricing (IV +11%, call skew .25, 1.5× bid/ask) | +11.3% | +9.4% | +10.8% | +10.7% | −28.9% | 0.54 | |
+| Core only, 85% (no options) | +9.8% | +6.9% | +8.9% | +8.8% | −21.9% | 0.61 | −16.7% |
+| Options dip strategy alone (with cash interest) | +6.9% | +7.2% | +8.0% | +7.3% | −18.3% | 0.55 | −5.8% |
+| SPY buy & hold | +6.6% | +13.1% | +15.2% | +10.4% | −55.2% | 0.49 | −36.8% |
+
+- **The options overlay adds about 4.7 points a year** on top of the core
+  (13.5% vs 8.8%) at 6% of the account per trade. The core sidesteps the
+  2000-02 and 2008 bear markets, which is where buy-and-hold's −55% came from.
+- **The result doesn't hinge on exact settings.** An 8- or 12-month lookback
+  and an 80% weight all land at 13.2-13.7%. A 90% core weight drops to 11.8%
+  for a mechanical reason: 90% core plus 2 × 6% premium exceeds the account,
+  so dip trades get skipped.
+- **Daily-rebalanced sleeve blending** (`scripts/research_portfolio.py`)
+  overstated the result by ~0.9 points a year (14.4% vs 13.5%). The
+  single-account figures are the reference.
+- **Where it lags:** in strong, uninterrupted bull markets (2011-2019,
+  2020-2026) buy-and-hold beat it. Its edge is in crashes and choppy markets,
+  and in a much smaller worst case.
+- Twelve percent of the account per trade (70% core) raises CAGR to ~18% but
+  the drawdown to −43%. That's a risk-preference choice, not an improvement.
+
+**How to run it:** the scanner prints the core instruction at the top.
+Re-check it at the last close of each month; the "month-end re-check" line
+previews the rule using today's close.
+
+---
+
+## 8. How to trade it
 
 ```bash
 python scripts/options_swing_signals.py        # today's signals + order tickets
@@ -387,8 +440,13 @@ python scripts/backtest_options_swing.py       # full backtest and stress tests
 python scripts/research_bias_checks.py         # untouched-data, placebo and pricing audits
 python scripts/research_robustness.py          # worst-case structure choice, fresh-ETF validation
 python scripts/research_shares_vs_options.py   # shares vs options vs hybrid, 2000-2026
+python scripts/research_core_overlay.py        # portfolio mode, single-account validation
+python scripts/research_exits.py               # pre-registered exit study (no change adopted)
 ```
 
+0. **Portfolio mode:** keep 85% of the account in SPY when the scanner says
+   `PORTFOLIO CORE: IN`, and in T-bills / a money-market fund when it says
+   `OUT`. Rebalance on the last trading day of each month.
 1. Run the scanner about 15 minutes before the close. If a symbol shows
    **ENTRY**, the ticket lists the strike, expiry, estimated debit, and
    take-profit value.
@@ -403,7 +461,7 @@ python scripts/research_shares_vs_options.py   # shares vs options vs hybrid, 20
    ticket** (about 1/3 of the account per ETF, same exits) instead of the
    call, and keep idle cash in T-bills.
 
-## 8. Limitations
+## 9. Limitations
 
 - **Close-only data.** Intraday paths, stops, and gaps aren't modeled, and the
   1-day-late test is the proxy for execution slippage.

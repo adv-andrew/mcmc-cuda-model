@@ -8,6 +8,20 @@ was the most reliable variant tested.
 
 > Full research write-up: [`docs/OPTIONS_SWING_STRATEGY.md`](docs/OPTIONS_SWING_STRATEGY.md)
 
+### Recommended: portfolio mode
+
+| 1996-2026, single-account backtest | CAGR | Max DD | Sharpe (excess) |
+|---|---|---|---|
+| **85% SPY trend core + options dip overlay** | **+13.5%** | **−27%** | **0.67** |
+| same, with harsh option pricing | +10.7% | −29% | 0.54 |
+| SPY buy & hold | +10.4% | −55% | 0.49 |
+
+Hold 85% of the account in SPY while SPY's month-end close is above its
+10-month average (otherwise T-bills), and buy the dip calls below with 6% of
+the account each. Returns were 13-14% in each era: 1996-2010, 2011-2019 and
+2020-2026. The scanner prints the core instruction. See section 7 of the
+write-up and `scripts/research_core_overlay.py`.
+
 ## Quick Start
 
 ```bash
@@ -113,6 +127,8 @@ T-bills (not credited above).
 | `python scripts/research_bias_checks.py` | Untouched 1991-2009 test, placebo, no-options, pricing stress, deflated Sharpe |
 | `python scripts/research_robustness.py` | Pre-registered worst-case structure choice; validation on 13 fresh ETFs |
 | `python scripts/research_shares_vs_options.py` | Shares vs options vs hybrid portfolios, 2000-2026 |
+| `python scripts/research_core_overlay.py` | Portfolio mode: trend core + options overlay, single-account validation |
+| `python scripts/research_exits.py` | Pre-registered exit study (winner failed validation; no change) |
 | `python scripts/get_signals.py` / `run_backtest.py` | Legacy stock signals / stock backtest |
 
 `options_now.py`, `options_signal_v4.py` and `backtest_options_v4.py` are
@@ -127,6 +143,7 @@ backtesting/
   options_pricing.py    # Black-Scholes, VIX-based IV model, skew, cost model
   options_backtest.py   # Portfolio options backtester (daily MTM), per-trade simulator, Monte Carlo
   shares_backtest.py    # Same signal traded in ETF shares
+  portfolio.py          # Trend core (Faber), sleeve blending, single-account simulator
   engine.py, metrics.py # Stock backtesting engine
 trading/
   options_swing.py      # Strategy rules, confidence score, trade tickets

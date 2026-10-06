@@ -83,6 +83,12 @@ class SwingConfig:
     max_concurrent: int = 2
     # shares alternative (most reliable vehicle in research_shares_vs_options.py)
     shares_position_frac: float = 0.33
+    # portfolio mode: trend-following core holds the idle capital
+    # (scripts/research_core_overlay.py)
+    portfolio_mode: bool = True
+    core_symbol: str = "SPY"
+    core_weight: float = 0.85
+    faber_months: int = 10
     # confidence tiers (score is 40 / 70 / 100)
     high_confidence: int = 100
     medium_confidence: int = 70
@@ -250,6 +256,34 @@ def build_ticket(
         shares_position_frac=cfg.shares_position_frac,
         reasons=reasons,
     )
+
+
+def core_status(close: pd.Series, cfg: SwingConfig) -> dict:
+    """Trend-core instruction from daily closes of ``cfg.core_symbol``.
+
+    The core is IN (hold ``core_weight`` of the account in the ETF) while the
+    last completed month-end close is above its ``faber_months``-month SMA,
+    otherwise OUT (T-bills / money market). Re-check on the last trading day
+    of each month: ``month_end_preview`` applies the rule to the current
+    month-to-date close.
+    """
+    month_ends = close.resample("ME").last().dropna()
+    last_day = close.index[-1]
+    completed = month_ends[month_ends.index < last_day.to_period("M").to_timestamp("M")]
+    sma_done = completed.rolling(cfg.faber_months).mean()
+    in_market = bool(completed.iloc[-1] > sma_done.iloc[-1])
+    preview_series = pd.concat([completed, pd.Series([close.iloc[-1]], index=[last_day])])
+    preview_sma = preview_series.rolling(cfg.faber_months).mean().iloc[-1]
+    return {
+        "symbol": cfg.core_symbol,
+        "in_market": in_market,
+        "last_month_end": str(completed.index[-1].date()),
+        "last_month_close": float(completed.iloc[-1]),
+        "sma": float(sma_done.iloc[-1]),
+        "month_end_preview_in": bool(close.iloc[-1] > preview_sma),
+        "preview_sma": float(preview_sma),
+        "core_weight": cfg.core_weight,
+    }
 
 
 def scan(

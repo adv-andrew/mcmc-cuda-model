@@ -20,7 +20,7 @@ import pandas as pd
 from backtesting.market_data import load_universe
 from backtesting.options_pricing import atm_iv_series
 from trading.features import build_features
-from trading.options_swing import SwingConfig, scan
+from trading.options_swing import SwingConfig, core_status, scan
 
 
 def main() -> None:
@@ -35,9 +35,17 @@ def main() -> None:
     ivs = {s: atm_iv_series(data[s], data["VIX"], data["SPY"]) for s in syms}
     result = scan(feats, ivs, cfg)
 
+    core = None
+    if cfg.portfolio_mode:
+        core_df = (data[cfg.core_symbol] if cfg.core_symbol in data
+                   else load_universe([cfg.core_symbol], refresh=True)[cfg.core_symbol])
+        core = core_status(core_df["Close"], cfg)
+        result = {"core": core, **result}
+
     if args.json:
         print(json.dumps(result, indent=2, default=str))
         return
+    result.pop("core", None)
 
     last = max(pd.Timestamp(v["date"]) for v in result.values())
     vix_last = data["VIX"].index[-1]
@@ -46,6 +54,17 @@ def main() -> None:
     print("=" * 72)
     print(f"Data through {last.date()}  |  VIX data through {vix_last.date()}"
           + ("  (stale: IV estimated from realized vol)" if (last - vix_last).days > 3 else ""))
+
+    if core:
+        state = (f"IN - hold {core['core_weight']:.0%} of the account in {core['symbol']}"
+                 if core["in_market"] else
+                 f"OUT - keep the core {core['core_weight']:.0%} in T-bills / money market")
+        print(f"\nPORTFOLIO CORE: {state}")
+        print(f"     {core['symbol']} {core['last_month_end']} close ${core['last_month_close']:.2f} "
+              f"vs {cfg.faber_months}-month SMA ${core['sma']:.2f}")
+        print(f"     month-end re-check (using today's close): would be "
+              f"{'IN' if core['month_end_preview_in'] else 'OUT'} "
+              f"(SMA ${core['preview_sma']:.2f}); act on it at the last close of the month")
 
     for sym, st in result.items():
         trend = "UP" if st["above200"] else "DOWN (no longs)"
@@ -78,8 +97,9 @@ def main() -> None:
     print("\nExit plan for every position: take profit at "
           f"+{cfg.profit_target:.0%}, otherwise exit at the first close above "
           f"the 5-day SMA once held >= {cfg.min_hold} days, and always by day {cfg.max_hold}.")
-    print(f"Size: risk {cfg.risk_per_trade:.0%} of the account per position (the debit is the "
-          f"max loss), at most {cfg.max_concurrent} open at once.")
+    print(f"Size: risk {cfg.risk_per_trade:.0%} of the TOTAL account per position (the debit is "
+          f"the max loss), at most {cfg.max_concurrent} open at once"
+          + (", paid from the cash not held in the core." if cfg.portfolio_mode else "."))
     print("Prices are model estimates. SKIP the trade if you cannot fill within ~2% of the "
           "estimated debit:\n  the bias checks showed that overpaying ~1.5 vol points "
           "(~4-5% of the premium) erases most of the edge.")

@@ -69,6 +69,16 @@ options_swing:
   max_concurrent: 2
   # shares alternative: fraction of equity per position (3 ETFs -> <= ~100%)
   shares_position_frac: 0.33
+  # portfolio mode (recommended): the idle capital sits in a trend-following
+  # core - core_weight of the account in core_symbol while its month-end close
+  # is above its faber_months-month SMA, otherwise T-bills. Option premiums
+  # (risk_per_trade of the TOTAL account) come from the remaining cash.
+  # 1996-2026 single-account backtest: CAGR 13.5%, max DD -27%
+  # (SPY buy & hold 10.4%, -55%). See scripts/research_core_overlay.py.
+  portfolio_mode: true
+  core_symbol: SPY
+  core_weight: 0.85
+  faber_months: 10
   # confidence tiers (score is 40 / 70 / 100; see confidence_score)
   high_confidence: 100
   medium_confidence: 70

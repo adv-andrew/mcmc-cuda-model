@@ -240,3 +240,36 @@ class TestRegimeMCMC:
         assert a is not None and b is not None
         assert a.p_up == pytest.approx(b.p_up)
         assert 0 <= a.p_up <= 1 and a.q05 <= a.median_return <= a.q95
+
+
+class TestCoreStatus:
+    def _close(self, trend):
+        idx = pd.bdate_range("2023-01-02", "2024-06-14")
+        return pd.Series(100 + trend * np.arange(len(idx)), index=idx)
+
+    def test_in_market_in_uptrend_and_out_in_downtrend(self):
+        from trading.options_swing import core_status
+
+        cfg = SwingConfig()
+        assert core_status(self._close(+0.2), cfg)["in_market"] is True
+        assert core_status(self._close(-0.1), cfg)["in_market"] is False
+
+    def test_uses_completed_months_like_the_backtest(self):
+        from backtesting.portfolio import faber_signal
+        from trading.options_swing import core_status
+
+        close = self._close(+0.2)
+        close.iloc[-5:] = 10.0  # crash inside the current, unfinished month
+        st = core_status(close, SwingConfig())
+        assert st["in_market"] == bool(faber_signal(close).iloc[-1])
+        assert st["in_market"] is True          # last completed month still up
+        assert st["month_end_preview_in"] is False  # but today's close says OUT
+        assert st["last_month_end"] == "2024-05-31"
+
+
+def test_portfolio_mode_config():
+    cfg = SwingConfig.from_yaml("config/default.yaml")
+    assert cfg.portfolio_mode and cfg.core_symbol == "SPY"
+    assert cfg.core_weight == 0.85 and cfg.faber_months == 10
+    # core + max option premium must fit in the account
+    assert cfg.core_weight + cfg.max_concurrent * cfg.risk_per_trade <= 1.0
