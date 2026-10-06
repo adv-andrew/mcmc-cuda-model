@@ -498,6 +498,23 @@ A replay from 2 January 2025 to 5 October 2026 made 40 option trades: 68% won,
 averaging +3.6% per trade, and the account rose 23.5% with a −15.9% max
 drawdown through the April 2025 tariff shock.
 
+### What to expect (`scripts/research_outcomes.py`)
+
+A block bootstrap of the 1996-2026 daily returns (10,000 paths, ~1-month
+blocks so crashes stay intact), sampled jointly with SPY:
+
+| | 1 yr: portfolio mode | 1 yr: SPY | 5 yr: portfolio mode | 5 yr: SPY |
+|---|---|---|---|---|
+| Bad case (5th percentile) | −11.0% | −16.9% | +8.4% | −12.5% |
+| Median | +14.0% | +11.6% | +90% (13.7%/yr) | +66% (10.6%/yr) |
+| Chance of losing money | 19% | 25% | 3% | 9% |
+| Chance of a −30% drawdown | 1% | 6% | 14% | 37% |
+| Beats SPY | 57% of paths | | 68% of paths | |
+
+This assumes the next few years resemble 1996-2026 and that the option
+pricing model is right. With harsh pricing, subtract about 3 points a year
+(section 7).
+
 ### Treasuries instead of T-bills when the core is out (`scripts/research_risk_off.py`)
 
 This was a single pre-registered test: adopt IEF (7-10 year Treasuries) as
